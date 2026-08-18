@@ -37,6 +37,32 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const startedAt = useRef(0)
   const opened = useRef<string | undefined>(undefined)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  /** 读者是否停在底部——决定流式输出要不要跟随滚动 */
+  const atBottom = useRef(true)
+  const [hasMore, setHasMore] = useState(false)
+
+  const syncScrollState = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight
+    atBottom.current = remaining < 80
+    setHasMore(remaining > 120)
+  }, [])
+
+  const resetToTop = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = 0
+    atBottom.current = false
+    requestAnimationFrame(syncScrollState)
+  }, [syncScrollState])
+
+  // 事件流的依赖只有 sessionId，回调经 ref 取用最新实现，避免重连
+  const resetToTopRef = useRef(resetToTop)
+  useEffect(() => {
+    resetToTopRef.current = resetToTop
+  }, [resetToTop])
 
   const loadCatalog = useCallback(() => {
     api.sessionModel(sessionId).then(setCatalog).catch(() => undefined)
@@ -57,6 +83,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
       .then(({ events }) => {
         if (cancelled) return
         setMessages(foldHistory(events))
+        resetToTopRef.current()
         if (events.length === 0 && opened.current !== sessionId) {
           opened.current = sessionId
           api.prompt(sessionId, '（开始）').catch(err => setError(String(err)))
@@ -79,6 +106,8 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         setElapsed(0)
         setRunning(true)
         setStreaming('')
+        // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
+        resetToTopRef.current()
       }
       if (event.type === 'turn/end') setRunning(false)
 
@@ -110,6 +139,26 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
     const timer = setInterval(() => setElapsed((Date.now() - startedAt.current) / 1000), 100)
     return () => clearInterval(timer)
   }, [running])
+
+  const scrollToEnd = useCallback(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [])
+
+  // 流式输出只在读者本就停在底部时跟随，往上翻看时不打断
+  useEffect(() => {
+    if (!streaming) return
+    if (atBottom.current) {
+      const el = scrollRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    }
+    syncScrollState()
+  }, [streaming, syncScrollState])
+
+  // 选项、错误等落定后重新测量，决定是否提示"还有内容"
+  useEffect(() => {
+    requestAnimationFrame(syncScrollState)
+  }, [messages, freeMode, error, syncScrollState])
 
   useEffect(() => {
     if (freeMode) textareaRef.current?.focus()
@@ -170,7 +219,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         </div>
       </header>
 
-      <div className="scroll">
+      <div className="scroll" ref={scrollRef} onScroll={syncScrollState}>
         <div className="column">
           {lastPlayerAction && (
             <div className="player-block">
@@ -182,10 +231,13 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           {running && (
             <div className="progress">
               <div className="bar"><i /></div>
-              <span>
-                GM 落笔中 · {elapsed.toFixed(1)}s
-                {streaming && ` · ${streaming.length} 字`}
-              </span>
+              <div className="progress-row">
+                <span>
+                  GM 落笔中 · {elapsed.toFixed(1)}s
+                  {streaming && ` · ${streaming.length} 字`}
+                </span>
+                <button className="stop" onClick={() => void api.cancel(sessionId)}>■ 停止</button>
+              </div>
             </div>
           )}
 
@@ -204,11 +256,8 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           {!streaming && !latest && !running && (
             <p className="dim">正在开场…</p>
           )}
-        </div>
-      </div>
 
-      <footer className="command">
-        <div className="column">
+          {/* 选项跟随正文，读完才出现——不占常驻屏幕空间 */}
           {options.length > 0 && (
             <div className="choices">
               {options.map(o => (
@@ -226,7 +275,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
             </div>
           )}
 
-          {options.length === 0 && showFreeEntry && (
+          {options.length === 0 && showFreeEntry && (streaming || latest) && (
             <div className="choices">
               <button className="choice free" onClick={() => setFreeMode(true)}>
                 <span className="key">{FREE_KEY}</span>
@@ -259,13 +308,16 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
             </div>
           )}
 
-          {running && (
-            <button className="stop" onClick={() => void api.cancel(sessionId)}>■ 停止</button>
-          )}
-
           {error && <div className="error">{error}</div>}
         </div>
-      </footer>
+      </div>
+
+      {/* 正文未读到底时的提示；点一下直接落到选项 */}
+      {hasMore && (
+        <button className="more-hint" onClick={scrollToEnd}>
+          ▼ 还有内容
+        </button>
+      )}
 
       {dossier && story && (
         <Dossier

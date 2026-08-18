@@ -76,13 +76,15 @@ body::after {
 .screen {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  position: relative;
 }
 
 .scroll {
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 24px 16px 32px;
+  scroll-behavior: smooth;
+  padding: 24px 16px 40px;
 }
 
 .column {
@@ -270,19 +272,48 @@ body::after {
   to { transform: translateX(250%); }
 }
 
+.progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .progress span { font-size: 11px; color: var(--faint); }
+
+/* 未读到底的提示，浮在右下角 */
+.more-hint {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  padding: 8px 14px;
+  background: var(--panel-strong);
+  border: 2px solid var(--border-strong);
+  color: var(--phosphor);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 20;
+  animation: nudge 2s steps(2) infinite;
+}
+
+.more-hint:hover { border-color: var(--phosphor); animation: none; }
+
+@keyframes nudge {
+  50% { transform: translateY(3px); }
+}
 
 /* ---- 命令栏 ---- */
 
-.command {
+/* 选项是内容流的一部分：读完正文往下滚才遇到，不常驻占屏 */
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 20px;
   border-top: 2px solid var(--border);
-  background: var(--panel);
-  padding: 14px 16px;
-  max-height: 52vh;
-  overflow-y: auto;
 }
-
-.choices { display: flex; flex-direction: column; gap: 8px; }
 
 .choice {
   display: grid;
@@ -321,7 +352,13 @@ body::after {
 .choice.free .key { background: var(--phosphor-dim); color: #051007; }
 .choice.free .label { color: var(--muted); font-weight: 400; }
 
-.composer { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; }
+.composer {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+  margin-top: 12px;
+}
 
 .composer .prompt {
   color: var(--phosphor);
@@ -382,6 +419,9 @@ button.ghost:hover { border-color: var(--border-strong); color: var(--fg); }
   border-color: var(--danger);
   color: var(--danger);
   align-self: flex-start;
+  padding: 4px 14px;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 /* ---- 剧本库 ---- */
