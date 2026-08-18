@@ -76,6 +76,18 @@ test('调性模板决定 persona 里出现哪一套工艺指令', () => {
   }
 })
 
+test('输出契约排在 persona 末尾，离生成点最近', () => {
+  const persona = renderPersona(storySchema.parse(story))
+  const contract = persona.indexOf('# 输出格式')
+  assert.ok(contract > 0, '应存在输出格式契约')
+  // 契约必须排在剧本设定之后——早先它在最前面，模型写到结尾会漏掉行动块
+  for (const marker of ['## 世界', '## 出场人物', '## 幕结构', '## 开场']) {
+    assert.ok(persona.indexOf(marker) < contract, `${marker} 应排在输出契约之前`)
+  }
+  // 契约之后只允许开局指令
+  assert.match(persona.slice(contract), /# 开局/)
+})
+
 test('编译产出 preset 三件套且幂等', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
   try {
