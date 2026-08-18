@@ -114,6 +114,18 @@ export function App() {
     await send(text)
   }
 
+  const forkFrom = async (atSeq: number) => {
+    if (!active) return
+    try {
+      setError(undefined)
+      const { sessionId } = await api.fork(active, atSeq)
+      await refresh()
+      setActive(sessionId)
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
   // 最后一条 GM 消息的行动选项（叙事中剥离选项块）
   const lastAssistantIndex = messages.findLastIndex(m => m.role === 'assistant')
   const currentOptions
@@ -174,6 +186,15 @@ export function App() {
                 return (
                   <div key={m.seq ?? `local-${i}`} className="msg assistant">
                     <pre>{narrative}</pre>
+                    {typeof m.seq === 'number' && (
+                      <button
+                        className="fork"
+                        title="从这一回合开一条新支线存档"
+                        onClick={() => void forkFrom(m.seq!)}
+                      >
+                        从此处分支
+                      </button>
+                    )}
                   </div>
                 )
               })}
