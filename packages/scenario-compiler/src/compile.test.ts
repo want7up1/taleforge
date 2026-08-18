@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { compileScenario, renderPersona, storySchema } from './index.ts'
+import { compileAll, compileScenario, renderPersona, storySchema } from './index.ts'
 
 const story = {
   format: 'taleforge.story.v0',
@@ -27,6 +27,29 @@ const story = {
 
 test('schema 拒绝非法剧本 id', () => {
   assert.throws(() => storySchema.parse({ ...story, id: 'wrong-prefix' }))
+})
+
+test('compileAll 回收源已删除的剧本，但不碰其他 preset', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const src = path.join(root, 'presets')
+    const out = path.join(root, 'out')
+    mkdirSync(path.join(src, 'a'), { recursive: true })
+    writeFileSync(path.join(src, 'a', 'story.json'), JSON.stringify(story))
+    mkdirSync(path.join(out, 'standard'), { recursive: true })   // 非本编译器产出，须保留
+
+    compileAll(src, out)
+    assert.ok(existsSync(path.join(out, 'story-test')))
+
+    rmSync(path.join(src, 'a'), { recursive: true })
+    const second = compileAll(src, out)
+
+    assert.ok(!existsSync(path.join(out, 'story-test')), '源已删除的剧本应被回收')
+    assert.ok(existsSync(path.join(out, 'standard')), '非 story- 前缀的 preset 不得删除')
+    assert.deepEqual(second.filter(r => r.removed).map(r => r.id), ['story-test'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('schema 拒绝未知调性模板', () => {

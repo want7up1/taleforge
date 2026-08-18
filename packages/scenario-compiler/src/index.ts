@@ -15,6 +15,8 @@ export interface CompileResult {
   id: string
   title: string
   presetDir: string
+  /** 源已删除，该 preset 被回收 */
+  removed?: boolean
 }
 
 export function loadStory(storyDir: string): Story {
@@ -60,15 +62,29 @@ export function compileScenario(storyDir: string, presetsRoot: string): CompileR
   return { id: story.id, title: story.title, presetDir }
 }
 
-/** 编译 sourceRoot 下所有含 story.json 的子目录。 */
+/**
+ * 把 sourceRoot 下的剧本源同步到 presetsRoot：编译现存的，清理源里已删除的。
+ * 只回收 story- 前缀的目录——那是本编译器的产出，其余 preset 一律不碰。
+ */
 export function compileAll(sourceRoot: string, presetsRoot: string): CompileResult[] {
-  if (!existsSync(sourceRoot)) return []
   const results: CompileResult[] = []
-  for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    const storyDir = path.join(sourceRoot, entry.name)
-    if (!existsSync(path.join(storyDir, 'story.json'))) continue
-    results.push(compileScenario(storyDir, presetsRoot))
+  if (existsSync(sourceRoot)) {
+    for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const storyDir = path.join(sourceRoot, entry.name)
+      if (!existsSync(path.join(storyDir, 'story.json'))) continue
+      results.push(compileScenario(storyDir, presetsRoot))
+    }
   }
+
+  if (existsSync(presetsRoot)) {
+    const live = new Set(results.map(r => r.id))
+    for (const entry of readdirSync(presetsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith('story-') || live.has(entry.name)) continue
+      rmSync(path.join(presetsRoot, entry.name), { recursive: true, force: true })
+      results.push({ id: entry.name, title: '', presetDir: '', removed: true })
+    }
+  }
+
   return results
 }

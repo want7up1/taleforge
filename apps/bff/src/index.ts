@@ -16,7 +16,10 @@ const dshHome = process.env.DSH_HOME ?? path.join(repoRoot, 'runtime/dsh-home')
 
 // 启动时把 presets/ 下的剧本源编译进 dsh 的 preset 根（幂等；preset 发现无缓存，立即可用）
 const compiled = compileAll(path.join(repoRoot, 'presets'), path.join(dshHome, '.agent-presets'))
-console.log(`[bff] 已编译剧本 ${compiled.length} 个：${compiled.map(c => c.id).join(', ') || '（无）'}`)
+const live = compiled.filter(c => !c.removed)
+const removed = compiled.filter(c => c.removed)
+console.log(`[bff] 已编译剧本 ${live.length} 个：${live.map(c => c.id).join(', ') || '（无）'}`)
+if (removed.length) console.log(`[bff] 已回收源已删除的剧本：${removed.map(c => c.id).join(', ')}`)
 const app = express()
 app.use(express.json({ limit: '1mb' }))
 
