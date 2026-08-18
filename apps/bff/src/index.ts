@@ -15,7 +15,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const dshHome = process.env.DSH_HOME ?? path.join(repoRoot, 'runtime/dsh-home')
 
 // 启动时把 presets/ 下的剧本源编译进 dsh 的 preset 根（幂等；preset 发现无缓存，立即可用）
-const compiled = compileAll(path.join(repoRoot, 'presets'), path.join(dshHome, '.agent-presets'))
+// preset 组合文件不支持动态求值，机制插件路径必须在生成时写死为本机的绝对路径
+const mechanicsEntry = path.join(repoRoot, 'packages/mechanics/src/index.ts')
+const compiled = compileAll(
+  path.join(repoRoot, 'presets'),
+  path.join(dshHome, '.agent-presets'),
+  mechanicsEntry,
+)
 const live = compiled.filter(c => !c.removed)
 const removed = compiled.filter(c => c.removed)
 console.log(`[bff] 已编译剧本 ${live.length} 个：${live.map(c => c.id).join(', ') || '（无）'}`)

@@ -50,6 +50,23 @@ export const storySchema = z.object({
     hook: z.string().min(1),
   }),
   acts: z.array(actSchema).min(1),
+  /** 本剧本启用的资源条；省略即纯叙事，不加载机制引擎。 */
+  mechanics: z
+    .object({
+      resources: z.array(z.object({
+        id: z.string().regex(/^[a-z][a-z0-9]*(:[a-z][a-z0-9-]*)?$/, '资源 id 形如 evolution 或 affinity:suwan'),
+        label: z.string().min(1),
+        group: z.enum(['affinity', 'self', 'world']),
+        min: z.number().int(),
+        max: z.number().int(),
+        initial: z.number().int(),
+        /** 下限护栏：可降但不破线 */
+        floor: z.number().int().optional(),
+        /** 单次调整上限，防止模型让数值失去意义 */
+        maxStep: z.number().int().positive(),
+      })).min(1),
+    })
+    .optional(),
   style: z.object({
     /** 调性模板：决定同样的情节写出来是什么味道。 */
     template: z.enum(['shuang', 'hardcore']),

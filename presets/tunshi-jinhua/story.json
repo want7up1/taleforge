@@ -88,6 +88,17 @@
       "forbidden_reveals": []
     }
   ],
+  "mechanics": {
+    "resources": [
+      { "id": "affinity:suwan", "label": "苏晚", "group": "affinity", "min": 0, "max": 100, "initial": 35, "floor": 15, "maxStep": 8 },
+      { "id": "affinity:huowei", "label": "霍薇", "group": "affinity", "min": 0, "max": 100, "initial": 5, "floor": 0, "maxStep": 8 },
+      { "id": "affinity:wenyao", "label": "温窈", "group": "affinity", "min": 0, "max": 100, "initial": 0, "floor": 0, "maxStep": 8 },
+      { "id": "affinity:jiangling", "label": "姜绫", "group": "affinity", "min": 0, "max": 100, "initial": 0, "floor": 0, "maxStep": 8 },
+      { "id": "evolution", "label": "进化度", "group": "self", "min": 0, "max": 100, "initial": 0, "maxStep": 15 },
+      { "id": "stamina", "label": "体力", "group": "self", "min": 0, "max": 100, "initial": 100, "maxStep": 30 },
+      { "id": "supplies", "label": "基地物资", "group": "world", "min": 0, "max": 100, "initial": 10, "maxStep": 20 }
+    ]
+  },
   "style": {
     "template": "shuang",
     "rating": "成人向。欲望、占有、亲密张力都写足，情动场景推进到关键处以留白收尾，转入余韵与关系变化。暴力与血腥按末世题材的强度写实呈现。",

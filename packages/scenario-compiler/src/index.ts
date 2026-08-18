@@ -24,8 +24,16 @@ export function loadStory(storyDir: string): Story {
   return storySchema.parse(JSON.parse(raw))
 }
 
-/** 编译单个剧本目录到 presetsRoot（幂等：整目录重建）。 */
-export function compileScenario(storyDir: string, presetsRoot: string): CompileResult {
+/**
+ * 编译单个剧本目录到 presetsRoot（幂等：整目录重建）。
+ * mechanicsEntry 是机制插件的绝对路径——preset 组合文件不支持动态求值，
+ * 跨机器的路径差异只能在生成时写死。
+ */
+export function compileScenario(
+  storyDir: string,
+  presetsRoot: string,
+  mechanicsEntry?: string,
+): CompileResult {
   const story = loadStory(storyDir)
   const presetDir = path.join(presetsRoot, story.id)
 
@@ -37,8 +45,8 @@ export function compileScenario(storyDir: string, presetsRoot: string): CompileR
     stringify({ name: story.title, description: story.tagline }),
   )
 
-  // 纯叙事 GM：persona 即完整 system prompt，零工具（机制模块行在 M2 按剧本声明追加）
-  const composition = [
+  // persona 即完整 system prompt；玩家会话只挂机制工具，绝不挂 bash/fs 等执行类工具
+  const composition: unknown[] = [
     {
       id: 'persona',
       name: '@deepseek-ai/dsh-persona',
@@ -49,6 +57,15 @@ export function compileScenario(storyDir: string, presetsRoot: string): CompileR
       },
     },
   ]
+
+  if (story.mechanics && mechanicsEntry) {
+    composition.push({
+      id: 'mechanics',
+      name: mechanicsEntry,
+      config: { resources: story.mechanics.resources },
+    })
+  }
+
   writeFileSync(path.join(presetDir, 'agent.cordis.yml'), stringify(composition))
 
   // 剧本源随 preset 存一份，供列表/工坊回读
@@ -66,14 +83,18 @@ export function compileScenario(storyDir: string, presetsRoot: string): CompileR
  * 把 sourceRoot 下的剧本源同步到 presetsRoot：编译现存的，清理源里已删除的。
  * 只回收 story- 前缀的目录——那是本编译器的产出，其余 preset 一律不碰。
  */
-export function compileAll(sourceRoot: string, presetsRoot: string): CompileResult[] {
+export function compileAll(
+  sourceRoot: string,
+  presetsRoot: string,
+  mechanicsEntry?: string,
+): CompileResult[] {
   const results: CompileResult[] = []
   if (existsSync(sourceRoot)) {
     for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       const storyDir = path.join(sourceRoot, entry.name)
       if (!existsSync(path.join(storyDir, 'story.json'))) continue
-      results.push(compileScenario(storyDir, presetsRoot))
+      results.push(compileScenario(storyDir, presetsRoot, mechanicsEntry))
     }
   }
 

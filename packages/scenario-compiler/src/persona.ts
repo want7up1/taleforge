@@ -98,6 +98,19 @@ export function renderPersona(story: Story): string {
   const extraRules = story.style.extra_rules.length
     ? `\n\n## 本剧本附加要求\n${story.style.extra_rules.map(r => `- ${r}`).join('\n')}`
     : ''
+  const mechanics = story.mechanics
+    ? `
+
+## 本作的数值
+
+这部作品有玩家可见的数值面板。**凡是本回合真实发生了变化的数值，都要用 \`adjust_resources\` 工具记录**，一个回合把所有变化放在一次调用里：
+
+${story.mechanics.resources.map(r => `- \`${r.id}\` ${r.label}（${r.min}–${r.max}）`).join('\n')}
+
+- 增减多少由你按剧情判断；系统会裁掉越界的部分并把最终结果返回给你，**以返回的结果为准继续叙事**，不要在正文里写与之矛盾的数字。
+- 正文里**不出现任何数字和机制词**——数值面板由界面呈现。你要做的是把变化写成可感的情节：好感上升写成她的眼神与动作变了，进化写成身体里涌上来的力量，体力见底写成视野发黑。
+- 不是每回合都必须有变化；但真的发生了（她被你打动、你吞了晶核、你受了伤、搜到了物资），就一定要记。`
+    : ''
 
   return `${BASE_CRAFT}
 
@@ -133,7 +146,7 @@ ${anchorLines(story)}
 
 场景：${story.opening.scene}
 
-钩子：${story.opening.hook}${extraRules}
+钩子：${story.opening.hook}${extraRules}${mechanics}
 
 ${OUTPUT_CONTRACT}
 
