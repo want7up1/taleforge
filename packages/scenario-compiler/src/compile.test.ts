@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { compileScenario, storySchema } from './index.ts'
+import { compileScenario, renderPersona, storySchema } from './index.ts'
 
 const story = {
   format: 'taleforge.story.v0',
@@ -22,11 +22,35 @@ const story = {
       forbidden_reveals: ['秘密'],
     },
   ],
-  style: { extra_rules: [] },
+  style: { template: 'shuang', extra_rules: [] },
 }
 
 test('schema 拒绝非法剧本 id', () => {
   assert.throws(() => storySchema.parse({ ...story, id: 'wrong-prefix' }))
+})
+
+test('schema 拒绝未知调性模板', () => {
+  assert.throws(() => storySchema.parse({ ...story, style: { template: 'unknown', extra_rules: [] } }))
+})
+
+test('调性模板决定 persona 里出现哪一套工艺指令', () => {
+  const shuang = renderPersona(storySchema.parse(story))
+  assert.match(shuang, /本作调性：爽/)
+  assert.match(shuang, /出手即碾压/)
+  assert.doesNotMatch(shuang, /代价与失败是好戏/)
+
+  const hardcore = renderPersona(
+    storySchema.parse({ ...story, style: { template: 'hardcore', extra_rules: [] } }),
+  )
+  assert.match(hardcore, /本作调性：硬核/)
+  assert.match(hardcore, /代价与失败是好戏/)
+  assert.doesNotMatch(hardcore, /出手即碾压/)
+
+  // 通用工艺与输出契约不随调性变化
+  for (const persona of [shuang, hardcore]) {
+    assert.match(persona, /承接优先/)
+    assert.match(persona, /【行动】/)
+  }
 })
 
 test('编译产出 preset 三件套且幂等', () => {

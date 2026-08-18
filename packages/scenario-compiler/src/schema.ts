@@ -50,13 +50,16 @@ export const storySchema = z.object({
     hook: z.string().min(1),
   }),
   acts: z.array(actSchema).min(1),
-  style: z
-    .object({
-      rating: z.string().optional(),
-      extra_rules: z.array(z.string()).max(3).default([]),
-    })
-    .default({ extra_rules: [] }),
+  style: z.object({
+    /** 调性模板：决定同样的情节写出来是什么味道。 */
+    template: z.enum(['shuang', 'hardcore']),
+    /** 内容强度声明，直接决定 GM 写到什么程度。 */
+    rating: z.string().optional(),
+    /** 本剧本特有的写作要求，上限 3 条——多了就该做成调性模板。 */
+    extra_rules: z.array(z.string()).max(3).default([]),
+  }),
 })
 
 export type Story = z.infer<typeof storySchema>
 export type Act = z.infer<typeof actSchema>
+export type ToneTemplate = Story['style']['template']
