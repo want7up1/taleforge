@@ -29,7 +29,18 @@
 - 仓库私有（github.com/want7up1/taleforge）。服务器按该机惯例用只读 deploy key 拉取：`~/.ssh/<deploy-key>`，已写进仓库的 `core.sshCommand`，`git pull` 免密。
 - 更新流程：本地推送 → `ssh <your-host>` → `cd /path/to/taleforge && git pull && sudo docker compose up -d --build`。依赖层有缓存，仅改应用代码时重建很快。
 
+## GM 提示词的分层（packages/scenario-compiler/src/persona.ts）
+
+顺序是：通用工艺 → 调性模板（爽文向/硬核向）→ 剧本数据 → **输出契约** → 开局指令。
+
+- 分层顺序即 prefix cache 的共享范围：改通用工艺打散全部剧本的缓存，改调性模板打散同调性剧本的。
+- **输出契约必须排在最末**，紧邻生成点。它原本跟在叙事工艺后面，中间隔着调性模板与整份剧本设定，实测模型写到结尾会漏掉行动块，玩家因此没有选项可点。已有测试锁住这个顺序，重构时别挪回去。
+- 剧本的 `style.template` 选调性；同调性的共性写进模板，别写进单个剧本的 `extra_rules`（上限 3 条就是这个用意）。
+
 ## 关键事实（环境查不到的）
+
+- **新建会话的日志不是空的**：dsh 会先写 `permission/preset`、`sandbox/mode`、`approval/policy` 三个配置事件。判断"这个会话开始过没有"要看有没有 `turn/start`，用 `events.length === 0` 会永远判为"已开始"，开场消息发不出去、界面卡在开场态。
+- 剧本详情接口必须剥掉 `world.hidden_truths` 与 `cast[].secret`——那些只属于 GM 提示词，下发前端等于剧透。
 
 - dsh 全家锁死 `0.1.0-rc.7`。官方明示 rc 版有破坏性变更、会话格式无兼容承诺——升级 dsh 是独立项目，需先在 `runtime/dsh-home` 副本上验证旧存档可读，不随手升。
 - dsh 网关只信任 loopback（127.0.0.1:3090），无认证；BFF（8790）是唯一对外入口，部署时两进程必须同容器。
