@@ -21,7 +21,8 @@
 
 - 生产部署永远只在 **<your-host> 的 Docker** 里，路径 `/path/to/taleforge`（该机 Docker 项目的既定布局）。不部署到其他任何环境；本地只做开发与验证。
 - 该机 Docker 命令需 `sudo`（ubuntu 用户不在 docker 组）。
-- 对外端口 3000（沿用 Rpgforge 的端口），**绑定 127.0.0.1**：BFF 与 dsh 都没有认证，公网直接暴露等于把 API key 和存档开放给所有人。远程访问走 SSH 隧道或在 lucky 上加认证的反向代理。
+- 对外端口 **31415**，**绑定 127.0.0.1**：BFF 与 dsh 都没有认证，公网直接暴露等于把 API key 和存档开放给所有人。远程访问走 SSH 隧道或在 lucky 上加认证的反向代理。
+- 端口须低于 32768：该机临时端口范围是 32768–60999，监听端口落在其中会偶发绑定冲突。
 - 容器内 dsh 与 BFF 必须同进程空间（dsh 只信任 loopback），单容器双进程由 `docker/entrypoint.sh` 拉起。
 - 持久化只有一个卷：`/path/to/taleforge/data` → 容器内 `DSH_HOME`，装着全部存档、凭据与编译产出的剧本 preset。重建容器安全，删卷即丢档。
 - 仓库私有（github.com/want7up1/taleforge）。服务器按该机惯例用只读 deploy key 拉取：`~/.ssh/<deploy-key>`，已写进仓库的 `core.sshCommand`，`git pull` 免密。

@@ -10,12 +10,14 @@ pnpm install
 pnpm dev               # 并行启动 dsh 运行时 + BFF + 前端
 ```
 
-- 玩家入口：http://localhost:5173 （开发）/ http://localhost:3000 （生产构建）
+- 玩家入口：http://localhost:5173 （开发）/ http://localhost:31415 （生产构建）
 - dsh 调试工作台：http://127.0.0.1:3090 （仅 loopback）
 
 ## 部署
 
-生产环境固定为 <your-host> 的 Docker（`/path/to/taleforge`），只监听 127.0.0.1:3000。详见 `CLAUDE.md`。
+生产环境固定为 <your-host> 的 Docker（`/path/to/taleforge`），只监听 127.0.0.1:31415。详见 `CLAUDE.md`。
+
+远程访问开隧道：`ssh -L 31415:127.0.0.1:31415 <your-host>`，然后浏览器打开 http://localhost:31415
 
 ```sh
 ssh <your-host>

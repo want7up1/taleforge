@@ -6,14 +6,14 @@ services:
     restart: unless-stopped
     # 仅监听 loopback：BFF 与 dsh 都无认证，公网暴露等于开放 API key 与存档
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:31415:31415"
     env_file:
       - .env
     volumes:
       # 全部持久化数据：存档、凭据、编译产出的剧本 preset
       - ./data:/app/runtime/dsh-home
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/app/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:31415/app/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

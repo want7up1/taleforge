@@ -20,8 +20,8 @@ RUN pnpm run build
 ENV NODE_ENV=production \
     DSH_HOME=/app/runtime/dsh-home \
     DSH_API_BASE=http://127.0.0.1:3090 \
-    PORT=3000
+    PORT=31415
 
-EXPOSE 3000
+EXPOSE 31415
 
 CMD ["bash", "docker/entrypoint.sh"]
