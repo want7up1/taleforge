@@ -84,7 +84,10 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         if (cancelled) return
         setMessages(foldHistory(events))
         resetToTopRef.current()
-        if (events.length === 0 && opened.current !== sessionId) {
+        // 新会话并非空日志（dsh 先写权限/沙箱等配置事件），只有 turn/start 能证明对话开过；
+        // 用它判断还能挡住"首回合生成中刷新页面"导致的重复开场。
+        const started = events.some(e => e.event.type === 'turn/start')
+        if (!started && opened.current !== sessionId) {
           opened.current = sessionId
           api.prompt(sessionId, '（开始）').catch(err => setError(String(err)))
         }
@@ -211,11 +214,11 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         </div>
         <div className="tools">
           <button onClick={() => setModelOpen(true)} title="切换本局模型">
-            ▨ {catalog?.current.model.replace('deepseek-v4-', '') ?? '…'}
+            ▨<span className="t">{' '}{catalog?.current.model.replace('deepseek-v4-', '') ?? '…'}</span>
           </button>
-          <button onClick={() => setDossier(true)}>▤ 卷宗</button>
-          <button onClick={onOpenHistory}>▦ 回顾</button>
-          <button onClick={onExit}>← 离开</button>
+          <button onClick={() => setDossier(true)} title="卷宗">▤<span className="t"> 卷宗</span></button>
+          <button onClick={onOpenHistory} title="回顾">▦<span className="t"> 回顾</span></button>
+          <button onClick={onExit} title="离开">←<span className="t"> 离开</span></button>
         </div>
       </header>
 

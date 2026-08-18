@@ -31,7 +31,8 @@
   --pixel: "Press Start 2P", var(--mono);
 }
 
-html, body, #root { height: 100%; }
+/* dvh 跟随移动端地址栏伸缩，避免底部内容被切掉 */
+html, body, #root { height: 100dvh; }
 
 body {
   background: var(--bg);
@@ -39,6 +40,7 @@ body {
   font-family: var(--mono);
   font-size: 14px;
   overflow: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 /* CRT 扫描线与暗角，仅两个伪元素 */
@@ -82,6 +84,7 @@ body::after {
 
 .scroll {
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   scroll-behavior: smooth;
   padding: 24px 16px 40px;
@@ -437,7 +440,7 @@ button.ghost:hover { border-color: var(--border-strong); color: var(--fg); }
 .cards { display: flex; flex-wrap: wrap; gap: 14px; }
 
 .card {
-  width: 300px;
+  width: min(300px, 100%);
   border: 2px solid var(--border);
   background: var(--panel);
   padding: 18px;
@@ -662,3 +665,71 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
 }
 
 .dim { color: var(--faint); }
+
+/* ---- 移动端 ---- */
+
+@media (max-width: 640px) {
+  .topbar {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  /* 品牌与按钮文字让位，只留图标；剧情信息优先 */
+  .brand { display: none; }
+  .tools .t { display: none; }
+
+  .tools button {
+    padding: 8px 10px;
+    font-size: 14px;
+    min-width: 38px;
+  }
+
+  .crumbs { gap: 8px; }
+  .crumbs b { font-size: 13px; }
+  .crumbs span { font-size: 11px; }
+  /* 场景名在窄屏最先让位 */
+  .crumbs span:last-child:nth-child(3) { display: none; }
+
+  .scroll { padding: 16px 14px 32px; }
+  .column { gap: 16px; }
+
+  /* 手机上行高收紧一点，一屏能多装两行字 */
+  .story { font-size: 1.02rem; line-height: 1.9; }
+  .story h3 { font-size: 0.85rem; }
+
+  .player-block, .gm-block { padding-left: 12px; }
+
+  .choice {
+    grid-template-columns: 1.75rem 1fr;
+    gap: 10px;
+    padding: 12px 10px;
+  }
+
+  .choice .key { width: 1.75rem; height: 1.75rem; font-size: 9px; }
+  .choice .label { font-size: 0.92rem; line-height: 1.55; }
+
+  .composer { grid-template-columns: 1fr; }
+  .composer .prompt { display: none; }
+  .composer-actions { grid-column: 1; }
+  /* 16px 以下 iOS 会在聚焦时自动放大页面 */
+  .composer textarea { font-size: 16px; }
+
+  .more-hint { right: 14px; bottom: 14px; }
+
+  .settings { gap: 20px; }
+  .cards { gap: 12px; }
+
+  .drawer { width: 100%; padding: 16px; }
+  .modal { width: 94vw; padding: 18px; }
+  .pick { padding: 10px 14px; }
+
+  .metrics { flex-wrap: wrap; gap: 14px; }
+  .key-row input { font-size: 16px; }
+}
+
+/* 横屏手机：竖向空间紧张，压缩纵向留白 */
+@media (max-height: 480px) and (orientation: landscape) {
+  .scroll { padding: 12px 14px 24px; }
+  .column { gap: 12px; }
+  .topbar { padding: 6px 12px; }
+}

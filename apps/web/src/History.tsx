@@ -32,7 +32,7 @@ export function History({ sessionId, story, onBack, onFork }: Props) {
           {story && <span>{story.title}</span>}
         </div>
         <div className="tools">
-          <button onClick={onBack}>← 返回游戏</button>
+          <button onClick={onBack}>←<span className="t"> 返回游戏</span></button>
         </div>
       </header>
 
