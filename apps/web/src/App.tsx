@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { foldHistory, messageOfEvent } from './fold.ts'
-import type { ChatMessage, MuxFrame, SessionSummary } from './types.ts'
+import { parseTurn } from './turn.ts'
+import type { ChatMessage, MuxFrame, ScenarioSummary, SessionSummary } from './types.ts'
+
+function sessionTitle(s: SessionSummary): string {
+  return s.projections?.values.title ?? new Date(s.updatedAt).toLocaleString()
+}
 
 export function App() {
+  const [scenarios, setScenarios] = useState<ScenarioSummary[]>([])
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [active, setActive] = useState<string>()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -13,18 +19,22 @@ export function App() {
   const [error, setError] = useState<string>()
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  const refreshSessions = useCallback(async () => {
+  const refresh = useCallback(async () => {
     try {
-      const { items } = await api.listSessions()
-      setSessions(items.filter(s => !s.blank))
+      const [{ items: sessionItems }, { items: scenarioItems }] = await Promise.all([
+        api.listSessions(),
+        api.listScenarios(),
+      ])
+      setSessions(sessionItems.filter(s => !s.blank))
+      setScenarios(scenarioItems)
     } catch (err) {
       setError(String(err))
     }
   }, [])
 
   useEffect(() => {
-    void refreshSessions()
-  }, [refreshSessions])
+    void refresh()
+  }, [refresh])
 
   // 切换会话：拉历史 + 订阅 SSE
   useEffect(() => {
@@ -32,6 +42,7 @@ export function App() {
     let cancelled = false
     setMessages([])
     setStreaming('')
+    setRunning(false)
     setError(undefined)
 
     api.history(active)
@@ -46,10 +57,17 @@ export function App() {
       if (frame.type !== 'session/event' || !frame.event) return
       const event = frame.event
       if (event.type === 'turn/start') setRunning(true)
-      if (event.type === 'turn/end') setRunning(false)
+      if (event.type === 'turn/end') {
+        setRunning(false)
+        void refresh()
+      }
       if (event.type === 'assistant/chunk') {
         const chunk = event.data.chunk
         if (chunk?.type === 'text-delta' && chunk.text) setStreaming(s => s + chunk.text)
+        if (chunk?.type === 'finish') {
+          const failure = (chunk as { reason?: { failure?: { message?: string } } }).reason?.failure
+          if (failure?.message) setError(failure.message)
+        }
         return
       }
       const msg = messageOfEvent(event)
@@ -58,46 +76,57 @@ export function App() {
         if (msg.role === 'assistant') setStreaming('')
       }
     }
-    source.onerror = () => {
-      // EventSource 自动重连；这里不弹错误
-    }
     return () => {
       cancelled = true
       source.close()
     }
-  }, [active])
+  }, [active, refresh])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streaming])
 
-  const newSession = async () => {
+  const startScenario = async (scenarioId: string) => {
     try {
-      const { sessionId } = await api.createSession()
+      setError(undefined)
+      const { sessionId } = await api.createSession(scenarioId)
       setActive(sessionId)
-      await refreshSessions()
+      // 开局：任意首条消息触发 GM 按剧本开场
+      await api.prompt(sessionId, '（开始）')
     } catch (err) {
       setError(String(err))
     }
   }
 
-  const send = async () => {
-    if (!active || !input.trim()) return
-    const text = input
-    setInput('')
+  const send = async (text: string) => {
+    if (!active || !text.trim()) return
+    setError(undefined)
     try {
       await api.prompt(active, text)
     } catch (err) {
       setError(String(err))
-      setInput(text)
     }
   }
+
+  const sendInput = async () => {
+    const text = input
+    setInput('')
+    await send(text)
+  }
+
+  // 最后一条 GM 消息的行动选项（叙事中剥离选项块）
+  const lastAssistantIndex = messages.findLastIndex(m => m.role === 'assistant')
+  const currentOptions
+    = !running && !streaming && lastAssistantIndex >= 0
+      ? parseTurn(messages[lastAssistantIndex].text).options
+      : []
 
   return (
     <div className="layout">
       <aside className="sidebar">
         <h1>TaleForge</h1>
-        <button onClick={newSession}>+ 新会话</button>
+        <button className="home" onClick={() => setActive(undefined)}>剧本库</button>
+        <div className="section">存档</div>
         <ul>
           {sessions.map(s => (
             <li key={s.sessionId}>
@@ -105,23 +134,49 @@ export function App() {
                 className={s.sessionId === active ? 'active' : ''}
                 onClick={() => setActive(s.sessionId)}
               >
-                <span className="preset">{s.agentPreset ?? 'default'}</span>
-                <span className="time">{new Date(s.updatedAt).toLocaleString()}</span>
+                <span className="preset">{sessionTitle(s)}</span>
+                <span className="time">
+                  {scenarios.find(sc => sc.id === s.agentPreset)?.name ?? s.agentPreset}
+                </span>
               </button>
             </li>
           ))}
         </ul>
       </aside>
       <main className="chat">
-        {!active && <div className="empty">选择或创建一个会话开始</div>}
+        {!active && (
+          <div className="library">
+            <h2>选择一个剧本，开始新的冒险</h2>
+            <div className="cards">
+              {scenarios.map(sc => (
+                <div key={sc.id} className="card">
+                  <h3>{sc.name}</h3>
+                  <p>{sc.description}</p>
+                  <button onClick={() => void startScenario(sc.id)}>开始冒险</button>
+                </div>
+              ))}
+              {scenarios.length === 0 && <p className="dim">暂无剧本（presets/ 目录为空或 dsh 未启动）</p>}
+            </div>
+          </div>
+        )}
         {active && (
           <>
             <div className="messages">
-              {messages.map((m, i) => (
-                <div key={m.seq ?? `local-${i}`} className={`msg ${m.role}`}>
-                  <pre>{m.text}</pre>
-                </div>
-              ))}
+              {messages.map((m, i) => {
+                if (m.role === 'user') {
+                  return (
+                    <div key={m.seq ?? `local-${i}`} className="msg user">
+                      <pre>{m.text}</pre>
+                    </div>
+                  )
+                }
+                const { narrative } = parseTurn(m.text)
+                return (
+                  <div key={m.seq ?? `local-${i}`} className="msg assistant">
+                    <pre>{narrative}</pre>
+                  </div>
+                )
+              })}
               {streaming && (
                 <div className="msg assistant streaming">
                   <pre>{streaming}</pre>
@@ -129,21 +184,30 @@ export function App() {
               )}
               <div ref={bottomRef} />
             </div>
+            {currentOptions.length > 0 && (
+              <div className="options">
+                {currentOptions.map(o => (
+                  <button key={o.key} onClick={() => void send(`${o.key}. ${o.label}`)}>
+                    <b>{o.key}</b> {o.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="composer">
               <textarea
                 value={input}
-                placeholder="输入行动…"
+                placeholder="或自由行动…"
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    void send()
+                    void sendInput()
                   }
                 }}
               />
               {running
                 ? <button onClick={() => active && void api.cancel(active)}>停止</button>
-                : <button onClick={() => void send()} disabled={!input.trim()}>发送</button>}
+                : <button onClick={() => void sendInput()} disabled={!input.trim()}>发送</button>}
             </div>
           </>
         )}

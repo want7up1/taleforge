@@ -5,11 +5,18 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compileAll } from '@taleforge/scenario-compiler'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
 
 const PORT = Number(process.env.PORT ?? 8790)
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+const dshHome = process.env.DSH_HOME ?? path.join(repoRoot, 'runtime/dsh-home')
+
+// 启动时把 presets/ 下的剧本源编译进 dsh 的 preset 根（幂等；preset 发现无缓存，立即可用）
+const compiled = compileAll(path.join(repoRoot, 'presets'), path.join(dshHome, '.agent-presets'))
+console.log(`[bff] 已编译剧本 ${compiled.length} 个：${compiled.map(c => c.id).join(', ') || '（无）'}`)
 const app = express()
 app.use(express.json({ limit: '1mb' }))
 
@@ -28,6 +35,15 @@ app.get('/app/health', asyncRoute(async (_req, res) => {
   } catch {
     res.json({ ok: true, dsh: false })
   }
+}))
+
+/** 剧本列表：dsh preset 目录中 story- 前缀的即为剧本。 */
+app.get('/app/scenarios', asyncRoute(async (_req, res) => {
+  const { presets } = await rpc<{ presets: { id: string; name: string; description?: string }[] }>(
+    'agentPreset.list',
+    {},
+  )
+  res.json({ items: presets.filter(p => p.id.startsWith('story-')) })
 }))
 
 app.get('/app/sessions', asyncRoute(async (_req, res) => {

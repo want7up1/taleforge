@@ -1,4 +1,4 @@
-import type { HistoryEntry, SessionSummary } from './types.ts'
+import type { HistoryEntry, ScenarioSummary, SessionSummary } from './types.ts'
 
 async function json<T>(resPromise: Promise<Response>): Promise<T> {
   const res = await resPromise
@@ -10,6 +10,8 @@ async function json<T>(resPromise: Promise<Response>): Promise<T> {
 }
 
 export const api = {
+  listScenarios: () => json<{ items: ScenarioSummary[] }>(fetch('/app/scenarios')),
+
   listSessions: () => json<{ items: SessionSummary[] }>(fetch('/app/sessions')),
 
   createSession: (agentPreset?: string) =>

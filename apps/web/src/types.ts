@@ -7,6 +7,21 @@ export interface SessionSummary {
   blank: boolean
   parentSessionId?: string
   agentPreset?: string
+  projections?: {
+    asOfSeq: number
+    values: { title?: string | null }
+  }
+}
+
+export interface ScenarioSummary {
+  id: string
+  name: string
+  description?: string
+}
+
+export interface ActionOption {
+  key: string
+  label: string
 }
 
 export interface ContentBlock {
