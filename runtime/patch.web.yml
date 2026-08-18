@@ -1,0 +1,10 @@
+# dsh web profile 的补丁覆盖层（dsh web --patch 本文件）。
+# 语义：与 bundle 各层平级的追加补丁列表；同 id 的 config 整体替换。
+# 参考 dsh 仓库 examples/web-cordis/cordis.yml 的写法。
+
+# 固定 dsh 网关地址；只监听 loopback，BFF 是唯一对外入口。
+# 用 3090 避开全局 dsh web 的默认端口 3080。
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 3090

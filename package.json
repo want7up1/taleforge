@@ -1,0 +1,21 @@
+{
+  "name": "taleforge",
+  "private": true,
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "dsh": "set -a; [ -f .env ] && . ./.env; set +a; DSH_HOME=$PWD/runtime/dsh-home dsh web --patch runtime/patch.web.yml",
+    "dsh:dump": "set -a; [ -f .env ] && . ./.env; set +a; DSH_HOME=$PWD/runtime/dsh-home dsh web --patch runtime/patch.web.yml --dump-config",
+    "dev:bff": "pnpm --filter @taleforge/bff dev",
+    "dev:web": "pnpm --filter @taleforge/web dev",
+    "dev": "concurrently -n dsh,bff,web -c blue,green,yellow \"pnpm run dsh\" \"pnpm run dev:bff\" \"pnpm run dev:web\"",
+    "build": "pnpm --filter @taleforge/web build",
+    "typecheck": "pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.7",
+    "concurrently": "^9.2.0"
+  }
+}
