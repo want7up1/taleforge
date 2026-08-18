@@ -6,3 +6,5 @@ dist/
 
 # dsh 运行时数据（会话/凭据/由编译器生成的剧本 preset）
 runtime/dsh-home/
+# 部署时的持久化卷
+data/

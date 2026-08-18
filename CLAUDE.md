@@ -17,6 +17,14 @@
 4. 玩家循环好玩之前不做作者工具面板/观测面板/评测体系；调试观测用 dsh 自带 Web 工作台（loopback 直连 3090）。可视化剧本编辑器永不做。
 5. 文档只留本文件 + README；历史与过程交给 git log。
 
+## 部署（唯一目标环境）
+
+- 生产部署永远只在 **<your-host> 的 Docker** 里，路径 `/path/to/taleforge`（该机 Docker 项目的既定布局）。不部署到其他任何环境；本地只做开发与验证。
+- 该机 Docker 命令需 `sudo`（ubuntu 用户不在 docker 组）。
+- 对外端口 3000（沿用 Rpgforge 的端口），**绑定 127.0.0.1**：BFF 与 dsh 都没有认证，公网直接暴露等于把 API key 和存档开放给所有人。远程访问走 SSH 隧道或在 lucky 上加认证的反向代理。
+- 容器内 dsh 与 BFF 必须同进程空间（dsh 只信任 loopback），单容器双进程由 `docker/entrypoint.sh` 拉起。
+- 持久化只有一个卷：`/path/to/taleforge/data` → 容器内 `DSH_HOME`，装着全部存档、凭据与编译产出的剧本 preset。重建容器安全，删卷即丢档。
+
 ## 关键事实（环境查不到的）
 
 - dsh 全家锁死 `0.1.0-rc.7`。官方明示 rc 版有破坏性变更、会话格式无兼容承诺——升级 dsh 是独立项目，需先在 `runtime/dsh-home` 副本上验证旧存档可读，不随手升。

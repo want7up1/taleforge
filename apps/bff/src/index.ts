@@ -10,7 +10,7 @@ import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
 
-const PORT = Number(process.env.PORT ?? 8790)
+const PORT = Number(process.env.PORT ?? 3000)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const dshHome = process.env.DSH_HOME ?? path.join(repoRoot, 'runtime/dsh-home')
 
