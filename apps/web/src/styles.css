@@ -1,5 +1,14 @@
 /* 磷光绿 CRT 终端 + 8-bit 像素。零圆角、2px 硬边框、扫描线覆层。 */
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+/* 字体自托管：部署在内网/隧道后访问，外部字体 CDN 未必可达（SIL OFL 1.1，允许再分发） */
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/press-start-2p.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+2000-206F, U+2192, U+25A0-25FF;
+}
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 

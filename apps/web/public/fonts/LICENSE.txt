@@ -1,0 +1,6 @@
+press-start-2p.woff2 — Press Start 2P by CodeMan38
+SIL Open Font License 1.1 (https://openfontlicense.org)
+Source: Google Fonts (https://fonts.google.com/specimen/Press+Start+2P)
+
+自托管原因：部署环境只监听 loopback，通过 SSH 隧道访问；不能依赖外部字体 CDN 可达。
+仅包含 latin 子集，界面中文由系统等宽/衬线字体承担。
