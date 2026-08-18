@@ -50,6 +50,11 @@ export function renderPersona(story: Story): string {
   const hidden = story.world.hidden_truths.length
     ? story.world.hidden_truths.map(h => `- [${h.id}] ${h.text}`).join('\n')
     : '- （无）'
+  const cast = story.cast.length
+    ? story.cast
+        .map(c => `- [${c.id}] ${c.name}——${c.identity}${c.secret ? `（暗线：${c.secret}）` : ''}`)
+        .join('\n')
+    : '- （无）'
   const extraRules = story.style.extra_rules.length
     ? `\n\n## 本剧本附加风格\n${story.style.extra_rules.map(r => `- ${r}`).join('\n')}`
     : ''
@@ -69,6 +74,10 @@ ${story.world.overview}
 ## 主角
 
 ${story.protagonist.name}——${story.protagonist.identity}${story.protagonist.voice ? `\n叙述声音：${story.protagonist.voice}` : ''}
+
+## 出场人物
+
+${cast}
 
 ## 隐藏真相（仅供保持一致性，绝不直接剧透）
 

@@ -36,6 +36,15 @@ export const storySchema = z.object({
     identity: z.string().min(1),
     voice: z.string().optional(),
   }),
+  /** 出场人物。name 用于正文中高亮成可点档案；secret 只进 GM 提示词，永不下发前端。 */
+  cast: z
+    .array(z.object({
+      id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
+      name: z.string().min(1),
+      identity: z.string().min(1),
+      secret: z.string().optional(),
+    }))
+    .default([]),
   opening: z.object({
     scene: z.string().min(1),
     hook: z.string().min(1),

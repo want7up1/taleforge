@@ -1,22 +1,35 @@
 import { useEffect, useState } from 'react'
 import { api } from './api.ts'
-import type { CredentialStatus } from './types.ts'
+import type { CredentialStatus, ModelSelection } from './types.ts'
 
 interface Props {
   status?: CredentialStatus
   onSaved: () => void
-  onClose?: () => void
 }
 
-export function Settings({ status, onSaved, onClose }: Props) {
+export function Settings({ status, onSaved }: Props) {
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const [saved, setSaved] = useState(false)
+  const [globalModel, setGlobalModel] = useState<ModelSelection>()
 
   useEffect(() => {
     setSaved(false)
   }, [status?.configured])
+
+  useEffect(() => {
+    api.globalModel().then(setGlobalModel).catch(() => undefined)
+  }, [])
+
+  const pickModel = async (patch: Partial<ModelSelection>) => {
+    if (!globalModel) return
+    try {
+      setGlobalModel(await api.saveGlobalModel({ ...globalModel, ...patch }))
+    } catch (err) {
+      setError(String(err))
+    }
+  }
 
   const save = async () => {
     setBusy(true)
@@ -51,11 +64,6 @@ export function Settings({ status, onSaved, onClose }: Props) {
 
   return (
     <div className="settings">
-      <div className="settings-head">
-        <h2>设置</h2>
-        {onClose && <button className="link" onClick={onClose}>返回</button>}
-      </div>
-
       <section>
         <h3>DeepSeek API Key</h3>
         {status?.configured
@@ -104,6 +112,41 @@ export function Settings({ status, onSaved, onClose }: Props) {
 
         {saved && <p className="state ok">已保存</p>}
         {error && <p className="state err">{error}</p>}
+      </section>
+
+      <section>
+        <h3>默认模型</h3>
+        <p className="state">
+          新开的游戏使用：
+          <b>{globalModel ? globalModel.model.replace('deepseek-v4-', 'V4 ') : '…'}</b>
+          {globalModel?.reasoningEffort ? ` · 推理 ${globalModel.reasoningEffort}` : ''}
+        </p>
+        <div className="pick-list">
+          {['deepseek-v4-flash', 'deepseek-v4-pro'].map(m => (
+            <button
+              key={m}
+              className={`pick${globalModel?.model === m ? ' on' : ''}`}
+              onClick={() => void pickModel({ model: m })}
+            >
+              {m.replace('deepseek-v4-', 'V4 ')}
+            </button>
+          ))}
+        </div>
+        <div className="pick-list" style={{ marginTop: 8 }}>
+          {['off', 'low', 'high', 'max'].map(e => (
+            <button
+              key={e}
+              className={`pick${globalModel?.reasoningEffort === e ? ' on' : ''}`}
+              onClick={() => void pickModel({ reasoningEffort: e })}
+            >
+              推理 {e}
+            </button>
+          ))}
+        </div>
+        <p className="hint">
+          Flash 快而省，Pro 更擅长长篇叙事的连贯与人物层次；推理强度越高想得越久越贵，
+          Off 关闭思考模式出文最快。单局可在游戏内临时切换，不影响这里的默认。
+        </p>
       </section>
     </div>
   )

@@ -19,6 +19,51 @@ export interface ScenarioSummary {
   description?: string
 }
 
+export interface StoryAct {
+  id: string
+  title: string
+  objective: string
+  anchors: { id: string; text: string; required: boolean }[]
+}
+
+/** 剧本的玩家可见信息（BFF 已剥掉隐藏真相与人物暗线）。 */
+export interface StoryDetail {
+  id: string
+  title: string
+  tagline: string
+  world: { overview: string; tone: string[] }
+  protagonist: { name: string; identity: string; voice?: string }
+  cast: { id: string; name: string; identity: string }[]
+  opening: { scene: string; hook: string }
+  acts: StoryAct[]
+}
+
+export interface ModelSelection {
+  provider: string
+  model: string
+  reasoningEffort?: string
+}
+
+export interface ModelCatalog {
+  current: ModelSelection
+  routable: boolean
+  groups: {
+    id: string
+    name: string
+    models: {
+      id: string
+      name: string
+      reasoning?: { efforts: { id: string; name: string }[]; defaultEffort?: string }
+    }[]
+  }[]
+}
+
+export interface SessionStats {
+  turns: number
+  llmMs: number
+  decodeTokens: number
+}
+
 export interface CredentialStatus {
   /** 是否已有非空值可用 */
   configured: boolean

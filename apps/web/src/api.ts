@@ -1,4 +1,12 @@
-import type { CredentialStatus, HistoryEntry, ScenarioSummary, SessionSummary } from './types.ts'
+import type {
+  CredentialStatus,
+  HistoryEntry,
+  ModelCatalog,
+  ModelSelection,
+  ScenarioSummary,
+  SessionSummary,
+  StoryDetail,
+} from './types.ts'
 
 async function json<T>(resPromise: Promise<Response>): Promise<T> {
   const res = await resPromise
@@ -24,7 +32,32 @@ export const api = {
   clearCredential: () =>
     json<{ ok: true }>(fetch('/app/settings/credentials', { method: 'DELETE' })),
 
+  globalModel: () => json<ModelSelection>(fetch('/app/settings/model')),
+
+  saveGlobalModel: (selection: ModelSelection) =>
+    json<ModelSelection>(
+      fetch('/app/settings/model', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(selection),
+      }),
+    ),
+
+  sessionModel: (sessionId: string) =>
+    json<ModelCatalog>(fetch(`/app/sessions/${sessionId}/model`)),
+
+  setSessionModel: (sessionId: string, selection: ModelSelection) =>
+    json<{ selected: ModelSelection }>(
+      fetch(`/app/sessions/${sessionId}/model`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(selection),
+      }),
+    ),
+
   listScenarios: () => json<{ items: ScenarioSummary[] }>(fetch('/app/scenarios')),
+
+  scenario: (id: string) => json<StoryDetail>(fetch(`/app/scenarios/${id}`)),
 
   listSessions: () => json<{ items: SessionSummary[] }>(fetch('/app/sessions')),
 
