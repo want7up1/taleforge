@@ -19,6 +19,15 @@ export interface ScenarioSummary {
   description?: string
 }
 
+export interface CredentialStatus {
+  /** 是否已有非空值可用 */
+  configured: boolean
+  /** 生效来源：file = 本界面写入；env = 启动环境注入 */
+  source?: string
+  /** 为 false 说明被环境变量遮蔽，本界面改不动 */
+  writable: boolean
+}
+
 export interface ActionOption {
   key: string
   label: string

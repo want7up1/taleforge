@@ -26,6 +26,42 @@ const asyncRoute
       handler(req, res).catch(next)
     }
 
+// ---- 设置：模型凭据 ----
+// 走 dsh 的 credentials 服务（写入 DSH_HOME/.credentials.yaml，随数据卷持久化且热生效）。
+// 环境变量是只读层：一旦 .env 里给了非空值，它会遮蔽此处的写入，届时 writable 为 false。
+
+const API_KEY_REF = 'DEEPSEEK_API_KEY'
+
+interface CredentialView {
+  configured: boolean
+  source?: string
+  writable: boolean
+}
+
+app.get('/app/settings/credentials', asyncRoute(async (_req, res) => {
+  const { credentials } = await rpc<{ credentials: Record<string, CredentialView> }>(
+    'credentials.describe',
+    { refs: [API_KEY_REF] },
+  )
+  res.json(credentials[API_KEY_REF] ?? { configured: false, writable: true })
+}))
+
+app.put('/app/settings/credentials', asyncRoute(async (req, res) => {
+  const { value } = (req.body ?? {}) as { value?: string }
+  const key = value?.trim()
+  if (!key) {
+    res.status(400).json({ error: { code: 'empty-key', message: 'API Key 不能为空' } })
+    return
+  }
+  await rpc('credentials.set', { ref: API_KEY_REF, value: key })
+  res.json({ ok: true })
+}))
+
+app.delete('/app/settings/credentials', asyncRoute(async (_req, res) => {
+  await rpc('credentials.unset', { ref: API_KEY_REF })
+  res.json({ ok: true })
+}))
+
 // ---- 会话管理 ----
 
 app.get('/app/health', asyncRoute(async (_req, res) => {

@@ -25,6 +25,7 @@
 - 端口须低于 32768：该机临时端口范围是 32768–60999，监听端口落在其中会偶发绑定冲突。
 - 容器内 dsh 与 BFF 必须同进程空间（dsh 只信任 loopback），单容器双进程由 `docker/entrypoint.sh` 拉起。
 - 持久化只有一个卷：`/path/to/taleforge/data` → 容器内 `DSH_HOME`，装着全部存档、凭据与编译产出的剧本 preset。重建容器安全，删卷即丢档。
+- **API Key 由 WebUI 设置页写入**，经 dsh credentials 服务落到 `data/.credentials.yaml`，热生效、随卷持久化。`.env` 里保持没有 `DEEPSEEK_API_KEY`：环境变量是只读层，一旦有非空值就遮蔽写入通道，设置页会变成只读（此时 `credentials.describe` 返回 `writable: false`）。
 - 仓库私有（github.com/want7up1/taleforge）。服务器按该机惯例用只读 deploy key 拉取：`~/.ssh/<deploy-key>`，已写进仓库的 `core.sshCommand`，`git pull` 免密。
 - 更新流程：本地推送 → `ssh <your-host>` → `cd /path/to/taleforge && git pull && sudo docker compose up -d --build`。依赖层有缓存，仅改应用代码时重建很快。
 

@@ -120,6 +120,81 @@ body {
 
 .dim { color: var(--dim); }
 
+.sidebar .home.attention { border-color: #b5793a; color: #d9954d; }
+
+.gate {
+  margin-bottom: 24px;
+  padding: 12px 16px;
+  border: 1px solid #6b4a22;
+  background: #241c11;
+  color: #d9954d;
+  font-size: 14px;
+}
+
+.card button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.settings { padding: 48px; max-width: 640px; overflow-y: auto; }
+
+.settings-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.settings h2 { font-size: 20px; color: var(--accent); }
+.settings h3 { font-size: 15px; margin-bottom: 12px; }
+
+.settings .state { font-size: 13px; margin: 8px 0; }
+.settings .state.ok { color: #6fae76; }
+.settings .state.warn { color: #d9954d; }
+.settings .state.err { color: #d66; }
+
+.settings .hint {
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.8;
+  margin-top: 10px;
+}
+
+.key-row { display: flex; gap: 8px; margin-top: 12px; }
+
+.key-row input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: 14px;
+}
+
+.key-row input:focus { outline: none; border-color: var(--accent); }
+
+.key-row button {
+  padding: 0 24px;
+  background: var(--accent);
+  border: none;
+  color: var(--bg);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.key-row button:disabled { opacity: 0.4; cursor: default; }
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  padding: 0;
+}
+
+button.link.danger { color: #b06a6a; margin-top: 16px; display: block; }
+
 .options {
   display: flex;
   flex-direction: column;

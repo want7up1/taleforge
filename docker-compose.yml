@@ -7,8 +7,10 @@ services:
     # 仅监听 loopback：BFF 与 dsh 都无认证，公网暴露等于开放 API key 与存档
     ports:
       - "127.0.0.1:31415:31415"
+    # .env 可选：留空即可，API Key 走 WebUI 设置页写入数据卷
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       # 全部持久化数据：存档、凭据、编译产出的剧本 preset
       - ./data:/app/runtime/dsh-home

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { foldHistory, messageOfEvent } from './fold.ts'
+import { Settings } from './Settings.tsx'
 import { parseTurn } from './turn.ts'
-import type { ChatMessage, MuxFrame, ScenarioSummary, SessionSummary } from './types.ts'
+import type { ChatMessage, CredentialStatus, MuxFrame, ScenarioSummary, SessionSummary } from './types.ts'
 
 function sessionTitle(s: SessionSummary): string {
   return s.projections?.values.title ?? new Date(s.updatedAt).toLocaleString()
@@ -11,6 +12,8 @@ function sessionTitle(s: SessionSummary): string {
 export function App() {
   const [scenarios, setScenarios] = useState<ScenarioSummary[]>([])
   const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [credential, setCredential] = useState<CredentialStatus>()
+  const [showSettings, setShowSettings] = useState(false)
   const [active, setActive] = useState<string>()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
@@ -21,12 +24,14 @@ export function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [{ items: sessionItems }, { items: scenarioItems }] = await Promise.all([
+      const [{ items: sessionItems }, { items: scenarioItems }, cred] = await Promise.all([
         api.listSessions(),
         api.listScenarios(),
+        api.credentialStatus(),
       ])
       setSessions(sessionItems.filter(s => !s.blank))
       setScenarios(scenarioItems)
+      setCredential(cred)
     } catch (err) {
       setError(String(err))
     }
@@ -137,7 +142,24 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>TaleForge</h1>
-        <button className="home" onClick={() => setActive(undefined)}>剧本库</button>
+        <button
+          className="home"
+          onClick={() => {
+            setActive(undefined)
+            setShowSettings(false)
+          }}
+        >
+          剧本库
+        </button>
+        <button
+          className={`home${credential && !credential.configured ? ' attention' : ''}`}
+          onClick={() => {
+            setActive(undefined)
+            setShowSettings(true)
+          }}
+        >
+          设置{credential && !credential.configured ? ' ·未配置' : ''}
+        </button>
         <div className="section">存档</div>
         <ul>
           {sessions.map(s => (
@@ -156,15 +178,33 @@ export function App() {
         </ul>
       </aside>
       <main className="chat">
-        {!active && (
+        {!active && showSettings && (
+          <Settings
+            status={credential}
+            onSaved={() => void refresh()}
+            onClose={() => setShowSettings(false)}
+          />
+        )}
+        {!active && !showSettings && (
           <div className="library">
             <h2>选择一个剧本，开始新的冒险</h2>
+            {credential && !credential.configured && (
+              <div className="gate">
+                还没有配置 DeepSeek API Key，游戏无法开始。
+                <button className="link" onClick={() => setShowSettings(true)}>前往设置</button>
+              </div>
+            )}
             <div className="cards">
               {scenarios.map(sc => (
                 <div key={sc.id} className="card">
                   <h3>{sc.name}</h3>
                   <p>{sc.description}</p>
-                  <button onClick={() => void startScenario(sc.id)}>开始冒险</button>
+                  <button
+                    onClick={() => void startScenario(sc.id)}
+                    disabled={credential && !credential.configured}
+                  >
+                    开始冒险
+                  </button>
                 </div>
               ))}
               {scenarios.length === 0 && <p className="dim">暂无剧本（presets/ 目录为空或 dsh 未启动）</p>}

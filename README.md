@@ -5,10 +5,11 @@
 ## 快速开始
 
 ```sh
-cp .env.example .env   # 填入 DEEPSEEK_API_KEY
 pnpm install
 pnpm dev               # 并行启动 dsh 运行时 + BFF + 前端
 ```
+
+首次打开在「设置」页填入 DeepSeek API Key 即可开玩，保存后立即生效（存进 dsh 数据卷，不入 Git）。
 
 - 玩家入口：http://localhost:5173 （开发）/ http://localhost:31415 （生产构建）
 - dsh 调试工作台：http://127.0.0.1:3090 （仅 loopback）

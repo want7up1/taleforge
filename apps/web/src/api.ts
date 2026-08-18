@@ -1,4 +1,4 @@
-import type { HistoryEntry, ScenarioSummary, SessionSummary } from './types.ts'
+import type { CredentialStatus, HistoryEntry, ScenarioSummary, SessionSummary } from './types.ts'
 
 async function json<T>(resPromise: Promise<Response>): Promise<T> {
   const res = await resPromise
@@ -10,6 +10,20 @@ async function json<T>(resPromise: Promise<Response>): Promise<T> {
 }
 
 export const api = {
+  credentialStatus: () => json<CredentialStatus>(fetch('/app/settings/credentials')),
+
+  saveCredential: (value: string) =>
+    json<{ ok: true }>(
+      fetch('/app/settings/credentials', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value }),
+      }),
+    ),
+
+  clearCredential: () =>
+    json<{ ok: true }>(fetch('/app/settings/credentials', { method: 'DELETE' })),
+
   listScenarios: () => json<{ items: ScenarioSummary[] }>(fetch('/app/scenarios')),
 
   listSessions: () => json<{ items: SessionSummary[] }>(fetch('/app/sessions')),
