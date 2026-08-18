@@ -666,6 +666,89 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
 
 .dim { color: var(--faint); }
 
+/* ---- 资源条 ---- */
+
+/* 顶栏精简：只放主角自身状态 */
+.meter-strip { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
+
+.strip-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.strip-label { color: var(--faint); white-space: nowrap; }
+
+.strip-track {
+  width: 42px;
+  height: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  display: inline-block;
+}
+
+.strip-track i { display: block; height: 100%; background: var(--phosphor-dim); }
+.strip-value { color: var(--phosphor); min-width: 20px; }
+
+/* 卷宗内的完整清单 */
+.meter { margin-bottom: 14px; }
+
+.meter-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.meter-label { font-size: 13px; color: var(--fg); }
+.meter-value { font-family: var(--pixel); font-size: 10px; color: var(--phosphor); }
+
+.meter-track {
+  height: 10px;
+  border: 2px solid var(--border);
+  background: var(--input);
+}
+
+.meter-track i {
+  display: block;
+  height: 100%;
+  background: var(--phosphor-dim);
+  transition: width 0.3s steps(8);
+}
+
+.meter.g-affinity .meter-track i { background: var(--amber); }
+.meter.g-world .meter-track i { background: var(--muted); }
+
+.meter-last { font-size: 11px; color: var(--faint); margin-top: 4px; line-height: 1.6; }
+.meter-last b { color: var(--phosphor); }
+
+/* 叙事流内的本回合结算 */
+.settlement {
+  border: 2px solid var(--border);
+  background: var(--panel);
+  padding: 12px 14px;
+}
+
+.settlement-title {
+  display: block;
+  font-family: var(--pixel);
+  font-size: 8px;
+  color: var(--faint);
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+}
+
+.settlement-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.9;
+  flex-wrap: wrap;
+}
+
+.settlement-row b { font-family: var(--pixel); font-size: 10px; min-width: 34px; }
+.settlement-row b.up { color: var(--phosphor); }
+.settlement-row b.down { color: var(--danger); }
+.settlement-label { color: var(--fg); }
+.settlement-after { color: var(--faint); }
+.settlement-reason { color: var(--muted); flex: 1 1 100%; padding-left: 42px; }
+
 /* ---- 移动端 ---- */
 
 @media (max-width: 640px) {
@@ -689,6 +772,12 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
   .crumbs span { font-size: 11px; }
   /* 场景名在窄屏最先让位 */
   .crumbs span:last-child:nth-child(3) { display: none; }
+
+  /* 顶栏放不下资源条了，条目挪进卷宗；正文里的结算卡片仍会即时反馈 */
+  .meter-strip { display: none; }
+
+  .settlement-row b { min-width: 30px; }
+  .settlement-reason { padding-left: 0; flex-basis: 100%; }
 
   .scroll { padding: 16px 14px 32px; }
   .column { gap: 16px; }

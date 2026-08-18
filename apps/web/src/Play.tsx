@@ -5,11 +5,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Dossier } from './Dossier.tsx'
-import { foldHistory, messageOfEvent } from './fold.ts'
+import { foldHistory, lastSettlement, messageOfEvent } from './fold.ts'
+import { MeterStrip } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { parseTurn } from './turn.ts'
-import type { ChatMessage, ModelCatalog, MuxFrame, SessionStats, StoryDetail } from './types.ts'
+import type {
+  ChatMessage,
+  MechanicsChange,
+  MechanicsSnapshot,
+  ModelCatalog,
+  MuxFrame,
+  SessionStats,
+  StoryDetail,
+} from './types.ts'
 
 interface Props {
   sessionId: string
@@ -25,6 +34,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const [streaming, setStreaming] = useState('')
   const [running, setRunning] = useState(false)
   const [stats, setStats] = useState<SessionStats>()
+  const [mechanics, setMechanics] = useState<MechanicsSnapshot>()
+  /** 本回合的结算明细，跟着正文一起显示 */
+  const [settlement, setSettlement] = useState<MechanicsChange[]>([])
   const [scene, setScene] = useState<string>()
   const [freeMode, setFreeMode] = useState(false)
   const [input, setInput] = useState('')
@@ -80,9 +92,12 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
 
     // 先连上事件流再拉历史：空存档要在这里补发开场，早于 SSE 会漏掉整段流式输出
     api.history(sessionId)
-      .then(({ events }) => {
+      .then(({ events, projections }) => {
         if (cancelled) return
         setMessages(foldHistory(events))
+        // 打开存档时立刻还原数值与最近一次结算，不必等下一回合
+        if (projections?.values.mechanics) setMechanics(projections.values.mechanics)
+        setSettlement(lastSettlement(events))
         resetToTopRef.current()
         // 新会话并非空日志（dsh 先写权限/沙箱等配置事件），只有 turn/start 能证明对话开过；
         // 用它判断还能挡住"首回合生成中刷新页面"导致的重复开场。
@@ -101,14 +116,28 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         setStats(frame.value as SessionStats)
         return
       }
+      if (frame.type === 'session/projection' && frame.key === 'mechanics') {
+        setMechanics(frame.value as MechanicsSnapshot)
+        return
+      }
       if (frame.type !== 'session/event' || !frame.event) return
       const event = frame.event
+
+      // 结算明细从 tool/result 的 meta 取，与正文同回合展示
+      if (event.type === 'tool/result') {
+        const meta = (event.data as { meta?: { kind?: string; changes?: MechanicsChange[] } }).meta
+        if (meta?.kind === 'mechanics/resources' && meta.changes?.length) {
+          setSettlement(meta.changes)
+        }
+        return
+      }
 
       if (event.type === 'turn/start') {
         startedAt.current = Date.now()
         setElapsed(0)
         setRunning(true)
         setStreaming('')
+        setSettlement([])
         // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
         resetToTopRef.current()
       }
@@ -212,6 +241,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           {turnNo > 0 && <span>第 {turnNo} 回合</span>}
           {scene && <span>{scene}</span>}
         </div>
+        {mechanics && <MeterStrip snapshot={mechanics} />}
         <div className="tools">
           <button onClick={() => setModelOpen(true)} title="切换本局模型">
             ▨<span className="t">{' '}{catalog?.current.model.replace('deepseek-v4-', '') ?? '…'}</span>
@@ -258,6 +288,24 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
 
           {!streaming && !latest && !running && (
             <p className="dim">正在开场…</p>
+          )}
+
+          {settlement.length > 0 && !running && (
+            <div className="settlement">
+              <span className="settlement-title">本回合结算</span>
+              {settlement.map(c => (
+                <div key={c.id} className="settlement-row">
+                  <b className={c.applied > 0 ? 'up' : 'down'}>
+                    {c.applied > 0 ? `+${c.applied}` : c.applied}
+                  </b>
+                  <span className="settlement-label">
+                    {mechanics?.defs.find(d => d.id === c.id)?.label ?? c.id}
+                  </span>
+                  <span className="settlement-after">→ {c.after}</span>
+                  <span className="settlement-reason">{c.reason}</span>
+                </div>
+              ))}
+            </div>
           )}
 
           {/* 选项跟随正文，读完才出现——不占常驻屏幕空间 */}
@@ -322,23 +370,16 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         </button>
       )}
 
-      {dossier && story && (
+      {(dossier || focusCharacter) && story && (
         <Dossier
           story={story}
           stats={stats}
+          mechanics={mechanics}
           focus={focusCharacter}
           onClose={() => {
             setDossier(false)
             setFocusCharacter(undefined)
           }}
-        />
-      )}
-      {focusCharacter && !dossier && story && (
-        <Dossier
-          story={story}
-          stats={stats}
-          focus={focusCharacter}
-          onClose={() => setFocusCharacter(undefined)}
         />
       )}
       {modelOpen && catalog && (

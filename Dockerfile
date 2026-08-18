@@ -12,6 +12,7 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/bff/package.json ./apps/bff/
 COPY apps/web/package.json ./apps/web/
 COPY packages/scenario-compiler/package.json ./packages/scenario-compiler/
+COPY packages/mechanics/package.json ./packages/mechanics/
 RUN pnpm install --frozen-lockfile
 
 COPY . .

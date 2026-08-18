@@ -1,15 +1,17 @@
 /** 卷宗抽屉：剧本静态信息 + 会话统计。全部零成本数据，不依赖任何状态提取。 */
 import { useEffect } from 'react'
-import type { SessionStats, StoryDetail } from './types.ts'
+import { MeterPanel } from './Meters.tsx'
+import type { MechanicsSnapshot, SessionStats, StoryDetail } from './types.ts'
 
 interface Props {
   story: StoryDetail
   stats?: SessionStats
+  mechanics?: MechanicsSnapshot
   focus?: string
   onClose: () => void
 }
 
-export function Dossier({ story, stats, focus, onClose }: Props) {
+export function Dossier({ story, stats, mechanics, focus, onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -35,6 +37,8 @@ export function Dossier({ story, stats, focus, onClose }: Props) {
             <p>{focused.identity}</p>
           </section>
         )}
+
+        {mechanics && <MeterPanel snapshot={mechanics} />}
 
         <section>
           <h3>主角</h3>
@@ -68,7 +72,6 @@ export function Dossier({ story, stats, focus, onClose }: Props) {
               <p className="muted">{act.objective}</p>
             </div>
           ))}
-          <p className="hint">进度追踪将随机制引擎一同上线。</p>
         </section>
 
         {stats && (

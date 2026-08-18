@@ -1,5 +1,11 @@
 /** 会话事件 → 聊天消息的折叠逻辑（M0：只认 user/message 与 assistant/message 的 text 块）。 */
-import type { ChatMessage, ContentBlock, HistoryEntry, SessionEvent } from './types.ts'
+import type {
+  ChatMessage,
+  ContentBlock,
+  HistoryEntry,
+  MechanicsChange,
+  SessionEvent,
+} from './types.ts'
 
 export function textOfBlocks(blocks: unknown): string {
   if (!Array.isArray(blocks)) return ''
@@ -20,6 +26,17 @@ export function messageOfEvent(event: SessionEvent): ChatMessage | undefined {
     if (text) return { role: 'assistant', text, seq: event.seq }
   }
   return undefined
+}
+
+/** 取最近一次机制结算，供刷新页面后仍能看到本回合的数值变化。 */
+export function lastSettlement(entries: HistoryEntry[]): MechanicsChange[] {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const event = entries[i].event
+    if (event.type !== 'tool/result') continue
+    const meta = (event.data as { meta?: { kind?: string; changes?: MechanicsChange[] } }).meta
+    if (meta?.kind === 'mechanics/resources') return meta.changes ?? []
+  }
+  return []
 }
 
 export function foldHistory(entries: HistoryEntry[]): ChatMessage[] {

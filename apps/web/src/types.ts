@@ -58,6 +58,38 @@ export interface ModelCatalog {
   }[]
 }
 
+export interface ResourceDef {
+  id: string
+  label: string
+  group: 'affinity' | 'self' | 'world'
+  min: number
+  max: number
+  initial: number
+  floor?: number
+  maxStep: number
+}
+
+export interface ResourceValue {
+  value: number
+  last?: { applied: number; reason: string }
+}
+
+/** mechanics projection 的载荷 */
+export interface MechanicsSnapshot {
+  defs: ResourceDef[]
+  state: Record<string, ResourceValue>
+}
+
+/** tool/result.meta 里的一次结算 */
+export interface MechanicsChange {
+  id: string
+  applied: number
+  before: number
+  after: number
+  reason: string
+  clamped: boolean
+}
+
 export interface SessionStats {
   turns: number
   llmMs: number
@@ -97,6 +129,15 @@ export interface SessionEvent {
 
 export interface HistoryEntry {
   event: SessionEvent
+}
+
+/** 历史尾页附带的投影基线，用来在打开存档时立刻还原当前数值 */
+export interface ProjectionsBlock {
+  asOfSeq: number
+  values: {
+    mechanics?: MechanicsSnapshot | null
+    sessionStats?: SessionStats
+  }
 }
 
 export interface MuxFrame {

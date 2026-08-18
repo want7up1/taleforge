@@ -3,6 +3,7 @@ import type {
   HistoryEntry,
   ModelCatalog,
   ModelSelection,
+  ProjectionsBlock,
   ScenarioSummary,
   SessionSummary,
   StoryDetail,
@@ -71,7 +72,9 @@ export const api = {
     ),
 
   history: (sessionId: string) =>
-    json<{ events: HistoryEntry[]; hasMore: boolean }>(fetch(`/app/sessions/${sessionId}/history`)),
+    json<{ events: HistoryEntry[]; hasMore: boolean; projections?: ProjectionsBlock }>(
+      fetch(`/app/sessions/${sessionId}/history`),
+    ),
 
   prompt: (sessionId: string, text: string) =>
     json<{ accepted: true }>(
