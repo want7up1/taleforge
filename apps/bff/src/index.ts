@@ -9,6 +9,7 @@ import { compileAll } from '@taleforge/scenario-compiler'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
+import { startObserver } from './observer.ts'
 
 const PORT = Number(process.env.PORT ?? 31415)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -28,6 +29,9 @@ const live = compiled.filter(c => !c.removed)
 const removed = compiled.filter(c => c.removed)
 console.log(`[bff] 已编译剧本 ${live.length} 个：${live.map(c => c.id).join(', ') || '（无）'}`)
 if (removed.length) console.log(`[bff] 已回收源已删除的剧本：${removed.map(c => c.id).join(', ')}`)
+
+// 被动结构观测：逐回合纯函数检查，只写 observer.jsonl，不干预（护栏 4/6）
+startObserver(dshHome)
 const app = express()
 app.use(express.json({ limit: '1mb' }))
 

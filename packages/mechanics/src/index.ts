@@ -123,6 +123,7 @@ export function apply(ctx: Context, config: Config) {
     title: '结算本回合变化',
     kindTag: 'mechanics/resources',
     reviseTarget: 'resource',
+    remindActionBlock: true,
     defs: resources,
     catalogLine: d => `- \`${d.id}\`（${(d as ResourceDef).label}，${d.min}–${d.max}，单次最多 ±${d.maxStep}）`,
     labelOf: id => resources.find(r => r.id === id)?.label ?? id,
@@ -341,6 +342,8 @@ function registerNumericTool(ctx: Context, opts: {
   labelOf: (id: string) => string
   pick: (meta: unknown) => meta is { changes: AppliedChange[] }
   description: string
+  /** 每正戏回合必调的工具挂行动块贴身提醒（低频工具不挂，避免噪音） */
+  remindActionBlock?: boolean
 }) {
   const catalog = opts.defs.map(opts.catalogLine).join('\n')
   ctx.tools.register(defineTool({
@@ -391,7 +394,7 @@ function registerNumericTool(ctx: Context, opts: {
       },
       render: (_args, value) => [{
         type: 'text',
-        text: (value.changes as AppliedChange[]).length === 0
+        text: ((value.changes as AppliedChange[]).length === 0
           ? '没有产生有效变化。'
           : (value.changes as AppliedChange[])
               .map((c) => {
@@ -399,7 +402,12 @@ function registerNumericTool(ctx: Context, opts: {
                 const note = c.clamped ? `（原提交 ${c.delta}，已按边界裁决）` : ''
                 return `${opts.labelOf(c.id)}：${sign}${c.applied} → ${c.after}${note}`
               })
-              .join('\n'),
+              .join('\n'))
+          // 行动块的贴身提醒：本工具在回合固定流程中最后调用，它的返回值是离生成点
+          // 最近的文本——实测强收束场景（如亲密戏收在余韵）会把 persona 末尾的契约忘掉
+          + (opts.remindActionBlock
+            ? '\n（正文写在正式输出中；结尾必须有【行动】块——【行动】独行 + A–D 四行选项。终幕回合除外。）'
+            : ''),
       }],
       presentationMeta: (_args, value) => ({ kind: opts.kindTag, changes: value.changes }),
     },

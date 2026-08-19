@@ -61,6 +61,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const [gmOpen, setGmOpen] = useState(false)
   /** 当前生成中的回合是否由场外消息发起（刷新丢失时靠（场外）前缀兜底判断） */
   const offstageTurn = useRef(false)
+  /** 本回合是否收到过可见正文——完成却全空说明模型把内容写进了推理通道 */
+  const sawText = useRef(true)
+  const [emptyTurn, setEmptyTurn] = useState(false)
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [elapsed, setElapsed] = useState(0)
@@ -185,11 +188,16 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         setSettlement([])
         setInvChanges([])
         setCheck(undefined)
+        sawText.current = false
+        setEmptyTurn(false)
         // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
         resetToTopRef.current()
       }
       if (event.type === 'turn/end') {
         setRunning(false)
+        // 完成却没有任何可见正文：内容翻进了推理通道，给玩家一个重新生成的出口
+        const reason = (event.data as { reason?: { kind?: string } }).reason?.kind
+        if (reason === 'completed' && !sawText.current) setEmptyTurn(true)
         offstageTurn.current = false
       }
 
@@ -205,6 +213,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
 
       const msg = messageOfEvent(event)
       if (msg) {
+        if (msg.role === 'assistant') sawText.current = true
         setMessages(prev => (prev.some(m => m.seq === msg.seq) ? prev : [...prev, msg]))
         if (msg.role === 'assistant') setStreaming('')
       }
@@ -418,6 +427,23 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
                   {c.reason && <span className="settlement-reason">{c.reason}</span>}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* 空白回合自愈：模型把整回合写进推理通道时，给玩家一个明确的出口 */}
+          {emptyTurn && idle && !ended && (
+            <div className="choices">
+              <div className="error">上一回合的正文没有送达（模型输出跑进了内部通道）。</div>
+              <button
+                className="choice free"
+                onClick={() => {
+                  setEmptyTurn(false)
+                  void send('（上一回合我没有收到任何正文——请重新输出这一回合：正文写在正式回复里，结尾带【行动】块。）')
+                }}
+              >
+                <span className="key">↻</span>
+                <span className="label">重新生成这一回合</span>
+              </button>
             </div>
           )}
 

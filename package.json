@@ -13,7 +13,7 @@
     "dev": "concurrently -n dsh,bff,web -c blue,green,yellow \"pnpm run dsh\" \"pnpm run dev:bff\" \"pnpm run dev:web\"",
     "build": "pnpm --filter @taleforge/web build",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "node --test apps/web/src/*.test.ts packages/*/src/*.test.ts"
+    "test": "node --test apps/web/src/*.test.ts apps/bff/src/*.test.ts packages/*/src/*.test.ts"
   },
   "devDependencies": {
     "@deepseek-ai/dsh": "0.1.0-rc.7",
