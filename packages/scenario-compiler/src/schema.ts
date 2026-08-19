@@ -73,8 +73,11 @@ export const storySchema = z.object({
     })
     .optional(),
   style: z.object({
-    /** 调性模板：决定同样的情节写出来是什么味道。 */
-    template: z.enum(['shuang', 'hardcore']),
+    /**
+     * 调性模块，可组合：决定同样的情节写出来是什么味道。
+     * 按声明顺序拼进 persona，例如 ['shuang', 'harem'] = 爽感 + 情感张力。
+     */
+    template: z.array(z.enum(['shuang', 'hardcore', 'harem'])).min(1),
     /** 内容强度声明，直接决定 GM 写到什么程度。 */
     rating: z.string().optional(),
     /** 本剧本特有的写作要求，上限 3 条——多了就该做成调性模板。 */
@@ -84,4 +87,4 @@ export const storySchema = z.object({
 
 export type Story = z.infer<typeof storySchema>
 export type Act = z.infer<typeof actSchema>
-export type ToneTemplate = Story['style']['template']
+export type ToneTemplate = Story['style']['template'][number]

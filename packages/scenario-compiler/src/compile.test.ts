@@ -22,7 +22,7 @@ const story = {
       forbidden_reveals: ['秘密'],
     },
   ],
-  style: { template: 'shuang', extra_rules: [] },
+  style: { template: ['shuang'], extra_rules: [] },
 }
 
 test('schema 拒绝非法剧本 id', () => {
@@ -53,7 +53,16 @@ test('compileAll 回收源已删除的剧本，但不碰其他 preset', () => {
 })
 
 test('schema 拒绝未知调性模板', () => {
-  assert.throws(() => storySchema.parse({ ...story, style: { template: 'unknown', extra_rules: [] } }))
+  assert.throws(() => storySchema.parse({ ...story, style: { template: ['unknown'], extra_rules: [] } }))
+})
+
+test('调性模块可组合，按声明顺序拼接', () => {
+  const persona = renderPersona(
+    storySchema.parse({ ...story, style: { template: ['shuang', 'harem'], extra_rules: [] } }),
+  )
+  assert.match(persona, /本作调性：爽/)
+  assert.match(persona, /本作调性：关系与张力/)
+  assert.ok(persona.indexOf('本作调性：爽') < persona.indexOf('本作调性：关系与张力'), '应按声明顺序')
 })
 
 test('调性模板决定 persona 里出现哪一套工艺指令', () => {
@@ -63,7 +72,7 @@ test('调性模板决定 persona 里出现哪一套工艺指令', () => {
   assert.doesNotMatch(shuang, /代价与失败是好戏/)
 
   const hardcore = renderPersona(
-    storySchema.parse({ ...story, style: { template: 'hardcore', extra_rules: [] } }),
+    storySchema.parse({ ...story, style: { template: ['hardcore'], extra_rules: [] } }),
   )
   assert.match(hardcore, /本作调性：硬核/)
   assert.match(hardcore, /代价与失败是好戏/)
