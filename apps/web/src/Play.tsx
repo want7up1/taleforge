@@ -31,6 +31,8 @@ interface Props {
   story?: StoryDetail
   onExit: () => void
   onOpenHistory: () => void
+  /** 重写回合会 fork 出新会话取代当前会话，由父组件切换 */
+  onSessionReplaced: (sessionId: string) => void
 }
 
 const FREE_KEY = 'E'
@@ -41,7 +43,7 @@ const isOffstageAsk = (text: string) => text.trimStart().startsWith(OFFSTAGE_PRE
 const stripOffstage = (text: string) =>
   text.replace(/^\s*【场外】\s*/, '').replace(/^\s*[（(]场外[)）]\s*/, '')
 
-export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
+export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplaced }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
   const [running, setRunning] = useState(false)
@@ -309,6 +311,21 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
     }
   }
 
+  const [retrying, setRetrying] = useState(false)
+  const retry = async () => {
+    if (retrying) return
+    setRetrying(true)
+    setError(undefined)
+    try {
+      const { sessionId: next } = await api.retry(sessionId)
+      onSessionReplaced(next)
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   const characterNames = story?.cast.map(c => c.name) ?? []
   const ended = progress?.phase === 'ended'
   // 场外回合的流式输出只进悬浮框，不打扰正文
@@ -484,6 +501,13 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
                 <button onClick={onExit}>返回首页</button>
               </div>
             </div>
+          )}
+
+          {/* 重写上一回合：fork 弃旧线，同一行动重新生成 */}
+          {idle && !ended && latest && !freeMode && (
+            <button className="retry-line" onClick={() => void retry()} disabled={retrying}>
+              {retrying ? '↻ 正在回退重写…' : '↻ 对这回合不满意——重写'}
+            </button>
           )}
 
           {freeMode && (

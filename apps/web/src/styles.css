@@ -34,6 +34,8 @@
 /* dvh 跟随移动端地址栏伸缩，避免底部内容被切掉 */
 html, body, #root { height: 100dvh; }
 
+html, body { overflow-x: hidden; }
+
 body {
   background: var(--bg);
   color: var(--fg);
@@ -285,10 +287,10 @@ body::after {
 
 .progress span { font-size: 11px; color: var(--faint); }
 
-/* 未读到底的提示，浮在右下角 */
+/* 未读到底的提示，浮在右下角（右侧 76px 起，让开 GM 悬浮球） */
 .more-hint {
   position: absolute;
-  right: 24px;
+  right: 76px;
   bottom: 24px;
   padding: 8px 14px;
   background: var(--panel-strong);
@@ -780,7 +782,8 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
   .settlement-row b { min-width: 30px; }
   .settlement-reason { padding-left: 0; flex-basis: 100%; }
 
-  .scroll { padding: 16px 14px 32px; }
+  /* 底部多留白：滚到底时正文与选项不被悬浮球遮住 */
+  .scroll { padding: 16px 14px 96px; }
   .column { gap: 16px; }
 
   /* 手机上行高收紧一点，一屏能多装两行字 */
@@ -804,7 +807,17 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
   /* 16px 以下 iOS 会在聚焦时自动放大页面 */
   .composer textarea { font-size: 16px; }
 
-  .more-hint { right: 14px; bottom: 14px; }
+  .more-hint { right: auto; left: 14px; bottom: 14px; }
+
+  /* 悬浮球缩小并让内容能滚出它的覆盖区 */
+  .gm-fab { width: 42px; height: 42px; right: 10px; bottom: 10px; font-size: 0.62rem; }
+  .gm-chat {
+    right: 8px;
+    left: 8px;
+    width: auto;
+    bottom: 60px;
+    max-height: 62vh;
+  }
 
   .settings { gap: 20px; }
   .cards { gap: 12px; }
@@ -983,3 +996,19 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
 .inv-row .name { color: var(--fg); }
 .inv-row .inv-qty { color: var(--amber); font-family: var(--mono); }
 .inv-row .muted { font-size: 0.82rem; }
+
+/* ---- 重写上一回合 ---- */
+
+.retry-line {
+  align-self: center;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.retry-line:hover { color: var(--amber); border-color: var(--amber); }
+.retry-line:disabled { opacity: 0.5; cursor: default; }

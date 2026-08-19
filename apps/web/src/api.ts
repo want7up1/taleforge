@@ -87,4 +87,8 @@ export const api = {
 
   cancel: (sessionId: string) =>
     json<{ accepted: true }>(fetch(`/app/sessions/${sessionId}/cancel`, { method: 'POST' })),
+
+  /** 重写上一回合：fork 弃旧线重发同一输入，返回新会话 id */
+  retry: (sessionId: string) =>
+    json<{ sessionId: string }>(fetch(`/app/sessions/${sessionId}/retry`, { method: 'POST' })),
 }

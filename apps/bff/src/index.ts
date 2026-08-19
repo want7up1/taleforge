@@ -267,6 +267,55 @@ app.post('/app/sessions/:id/fork', (_req, res) => {
   })
 })
 
+/**
+ * 重写上一回合：fork 到上一个回合边界、弃旧线、原样重发玩家输入。
+ * session.fork 的 atSeq 语义：切点是 atSeq 起的第一个 turn/end——传上上个
+ * turn/end 的 seq 正好把最后一回合裁掉。只有开场一回合时退化为重开新局。
+ */
+interface HistoryEventLite {
+  event: { type: string; seq: number; data: { content?: unknown; reason?: unknown } }
+}
+
+const textOfBlocks = (blocks: unknown): string =>
+  (Array.isArray(blocks) ? blocks : [])
+    .filter((b): b is { type: string; text: string } =>
+      typeof b === 'object' && b !== null
+      && (b as { type?: unknown }).type === 'text'
+      && typeof (b as { text?: unknown }).text === 'string')
+    .map(b => b.text)
+    .join('')
+
+app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
+  const sessionId = req.params.id
+  const { events } = await rpc<{ events: HistoryEventLite[] }>('session.history', { sessionId })
+  const flat = events.map(e => e.event)
+  const lastStart = flat.findLastIndex(e => e.type === 'turn/start')
+  if (lastStart < 0) {
+    res.status(400).json({ error: { code: 'no-turn', message: '还没有可重写的回合' } })
+    return
+  }
+  const lastUserText = textOfBlocks(flat.slice(lastStart).find(e => e.type === 'user/message')?.data.content)
+  const turnEnds = flat.filter(e => e.type === 'turn/end')
+
+  if (turnEnds.length >= 2 && lastUserText) {
+    const anchor = turnEnds[turnEnds.length - 2].seq
+    const { sessionId: child } = await rpc<{ sessionId: string }>('session.fork', { sessionId, atSeq: anchor })
+    const removed = pruneSessions(child)
+    console.log(`[bff] 重写回合：fork@${anchor} → ${child}，清除旧线 ${removed} 个`)
+    await rpc('session.prompt', { sessionId: child, mode: 'queue', content: [{ type: 'text', text: lastUserText }] })
+    res.json({ sessionId: child })
+    return
+  }
+
+  // 只有开场一回合（或取不到输入）：重开同一剧本的新局，开场消息由前端照常补发
+  const { items } = await rpc<{ items: { sessionId: string; agentPreset?: string }[] }>('session.list', {})
+  const preset = items.find(s => s.sessionId === sessionId)?.agentPreset
+  const created = await rpc<{ sessionId: string }>('session.create', preset ? { agentPreset: preset } : {})
+  pruneSessions(created.sessionId)
+  console.log(`[bff] 重写开场：重开新局 ${created.sessionId}`)
+  res.json({ sessionId: created.sessionId })
+}))
+
 // ---- mux → SSE 桥 ----
 
 app.get('/app/sessions/:id/events', (req, res) => {

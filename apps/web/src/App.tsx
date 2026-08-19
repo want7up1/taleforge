@@ -71,6 +71,10 @@ export function App() {
           void refresh()
         }}
         onOpenHistory={() => setView('history')}
+        onSessionReplaced={(next) => {
+          setActive(next)
+          void refresh()
+        }}
       />
     )
   }
