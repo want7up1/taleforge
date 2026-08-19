@@ -9,10 +9,14 @@ import type {
   InventoryState,
 } from './types.ts'
 
+/** dsh 要求工具输出无损 JSON：undefined 键必须整个省略，本文件所有对象构造遵守此约 */
+const withNote = (note?: string): { note?: string } => (note === undefined ? {} : { note })
+const withReason = (reason?: string): { reason?: string } => (reason === undefined ? {} : { reason })
+
 export function initialInventory(items: InventoryItemDef[]): InventoryState {
   const state: InventoryState = {}
   for (const item of items) {
-    state[item.id] = { name: item.name, qty: Math.max(1, item.qty), note: item.note }
+    state[item.id] = { name: item.name, qty: Math.max(1, item.qty), ...withNote(item.note) }
   }
   return state
 }
@@ -33,8 +37,11 @@ export function applyInventory(
       if (!existing && !change.name) continue // 新物品必须给名字
       const name = change.name ?? existing!.name
       const qty = (existing?.qty ?? 0) + delta
-      next[change.id] = { name, qty, note: change.note ?? existing?.note }
-      applied.push({ op: 'add', id: change.id, name, qty, delta, removed: false, note: change.note, reason: change.reason })
+      next[change.id] = { name, qty, ...withNote(change.note ?? existing?.note) }
+      applied.push({
+        op: 'add', id: change.id, name, qty, delta, removed: false,
+        ...withNote(change.note), ...withReason(change.reason),
+      })
       continue
     }
 
@@ -44,10 +51,16 @@ export function applyInventory(
       const qty = existing.qty + delta
       if (qty <= 0) {
         delete next[change.id]
-        applied.push({ op: 'remove', id: change.id, name: existing.name, qty: 0, delta: -existing.qty, removed: true, reason: change.reason })
+        applied.push({
+          op: 'remove', id: change.id, name: existing.name, qty: 0, delta: -existing.qty,
+          removed: true, ...withReason(change.reason),
+        })
       } else {
         next[change.id] = { ...existing, qty }
-        applied.push({ op: 'remove', id: change.id, name: existing.name, qty, delta, removed: false, reason: change.reason })
+        applied.push({
+          op: 'remove', id: change.id, name: existing.name, qty, delta,
+          removed: false, ...withReason(change.reason),
+        })
       }
       continue
     }
@@ -57,11 +70,17 @@ export function applyInventory(
       const qty = qtyArg ?? existing.qty
       if (qty <= 0) {
         delete next[change.id]
-        applied.push({ op: 'set', id: change.id, name: existing.name, qty: 0, delta: -existing.qty, removed: true, reason: change.reason })
+        applied.push({
+          op: 'set', id: change.id, name: existing.name, qty: 0, delta: -existing.qty,
+          removed: true, ...withReason(change.reason),
+        })
       } else {
         const name = change.name ?? existing.name
-        next[change.id] = { name, qty, note: change.note ?? existing.note }
-        applied.push({ op: 'set', id: change.id, name, qty, delta: qty - existing.qty, removed: false, note: change.note, reason: change.reason })
+        next[change.id] = { name, qty, ...withNote(change.note ?? existing.note) }
+        applied.push({
+          op: 'set', id: change.id, name, qty, delta: qty - existing.qty,
+          removed: false, ...withNote(change.note), ...withReason(change.reason),
+        })
       }
     }
   }
@@ -83,7 +102,7 @@ export function foldInventory(
         state[change.id] = {
           name: change.name,
           qty: change.qty,
-          note: change.note ?? state[change.id]?.note,
+          ...withNote(change.note ?? state[change.id]?.note),
         }
       }
     }

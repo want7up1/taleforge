@@ -257,6 +257,8 @@ export function validateRevisions(
   const accepted: Revision[] = []
   const rejected: { index: number; reason: string }[] = []
   const intOrUndef = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : undefined)
+  const compact = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
+    Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>
   entries.forEach((raw, index) => {
     const target = raw.target
     const text = typeof raw.text === 'string' ? raw.text.trim() : ''
@@ -266,21 +268,22 @@ export function validateRevisions(
       if (!known.some(n => n.id === id)) {
         return rejected.push({ index, reason: `${target} id 不存在：${id}（中途增删条目走落盘+新局）` }) && undefined
       }
-      const fields = {
+      // dsh 要求工具输出是无损 JSON：对象里不能出现值为 undefined 的键，未给的字段必须整个省略
+      const fields = compact({
         label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : undefined,
         guidance: typeof raw.guidance === 'string' && raw.guidance.trim() ? raw.guidance.trim() : undefined,
         min: intOrUndef(raw.min),
         max: intOrUndef(raw.max),
         maxStep: intOrUndef(raw.maxStep),
         floor: target === 'resource' ? intOrUndef(raw.floor) : undefined,
-      }
-      if (Object.values(fields).every(v => v === undefined)) {
+      })
+      if (Object.keys(fields).length === 0) {
         return rejected.push({ index, reason: '至少给一个要修改的字段（label/guidance/min/max/maxStep/floor）' }) && undefined
       }
-      if (fields.maxStep !== undefined && fields.maxStep <= 0) {
+      if (typeof fields.maxStep === 'number' && fields.maxStep <= 0) {
         return rejected.push({ index, reason: 'maxStep 必须为正' }) && undefined
       }
-      accepted.push({ target, id, ...fields })
+      accepted.push({ target, id, ...fields } as Revision)
       return
     }
     if (target === 'world' || target === 'direction') {
@@ -313,9 +316,11 @@ export function validateRevisions(
         act: actId,
         op,
         id,
-        text: text || undefined,
-        signal: typeof raw.signal === 'string' ? raw.signal : undefined,
-        required: typeof raw.required === 'boolean' ? raw.required : undefined,
+        ...compact({
+          text: text || undefined,
+          signal: typeof raw.signal === 'string' ? raw.signal : undefined,
+          required: typeof raw.required === 'boolean' ? raw.required : undefined,
+        }),
       })
       return
     }

@@ -198,8 +198,9 @@ export function apply(ctx: Context, config: Config) {
           modifier: Number.isFinite(args.modifier) ? Math.trunc(args.modifier as number) : 0,
           reason: String(args.reason ?? ''),
         })
-        const { kind: _kind, ...value } = result
-        return Promise.resolve(value)
+        // dsh 要求工具输出无损 JSON：undefined 键必须整个省略（不带属性的判定没有 attribute）
+        const { kind: _kind, attribute, ...rest } = result
+        return Promise.resolve(attribute === undefined ? rest : { attribute, ...rest })
       },
       presentCall: () => ({ card: 'generic', title: '掷骰判定', kind: 'other' }),
     }))

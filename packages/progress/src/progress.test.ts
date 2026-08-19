@@ -172,8 +172,9 @@ test('数值定义修订校验：未知 id 拒绝、空字段拒绝、合法条�
   )
   assert.equal(accepted.length, 2)
   assert.equal(rejected.length, 3)
-  assert.deepEqual(accepted[0], {
-    target: 'resource', id: 'hp', label: undefined, guidance: '新语义',
-    min: undefined, max: 80, maxStep: undefined, floor: undefined,
-  })
+  assert.deepEqual(accepted[0], { target: 'resource', id: 'hp', guidance: '新语义', max: 80 })
+  // dsh 无损 JSON 约束：未给的字段必须整个省略，不能是 undefined 键
+  for (const entry of accepted) {
+    assert.ok(!Object.values(entry).includes(undefined), 'accepted 里不得携带 undefined 键')
+  }
 })
