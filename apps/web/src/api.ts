@@ -87,13 +87,4 @@ export const api = {
 
   cancel: (sessionId: string) =>
     json<{ accepted: true }>(fetch(`/app/sessions/${sessionId}/cancel`, { method: 'POST' })),
-
-  fork: (sessionId: string, atSeq?: number) =>
-    json<{ sessionId: string }>(
-      fetch(`/app/sessions/${sessionId}/fork`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(typeof atSeq === 'number' ? { atSeq } : {}),
-      }),
-    ),
 }

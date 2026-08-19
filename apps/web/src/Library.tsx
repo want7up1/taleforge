@@ -21,6 +21,7 @@ export function Library({
   onSettings,
 }: Props) {
   const blocked = credential && !credential.configured
+  const current = sessions[0]
 
   return (
     <div className="screen">
@@ -43,38 +44,49 @@ export function Library({
             </div>
           )}
 
-          <h2 className="section-title">开始新的冒险</h2>
+          {/* 单存档：有进度时先给「继续」，开新局需要明确覆盖 */}
+          {current && (
+            <>
+              <h2 className="section-title">继续冒险</h2>
+              <div className="saves">
+                <button className="save-row" onClick={() => onResume(current)}>
+                  <span className="save-title">
+                    {current.projections?.values.title ?? '未命名存档'}
+                  </span>
+                  <span className="save-meta">
+                    {scenarios.find(sc => sc.id === current.agentPreset)?.name ?? current.agentPreset}
+                    {' · '}
+                    {new Date(current.updatedAt).toLocaleString()}
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
+
+          <h2 className="section-title">{current ? '重新开始' : '开始新的冒险'}</h2>
+          {current && (
+            <p className="hint">
+              平台目前只保留一个存档。开新局会覆盖上面这个进度，暂时无法找回。
+            </p>
+          )}
           <div className="cards">
             {scenarios.map(sc => (
               <article key={sc.id} className="card">
                 <h3>{sc.name}</h3>
                 <p>{sc.description}</p>
-                <button onClick={() => onStart(sc.id)} disabled={blocked}>开始 ▸</button>
+                <button
+                  onClick={() => {
+                    if (current && !confirm('开新局会覆盖当前存档，确定吗？')) return
+                    onStart(sc.id)
+                  }}
+                  disabled={blocked}
+                >
+                  {current ? '覆盖并重新开始' : '开始 ▸'}
+                </button>
               </article>
             ))}
             {scenarios.length === 0 && <p className="dim">暂无剧本。</p>}
           </div>
-
-          {sessions.length > 0 && (
-            <>
-              <h2 className="section-title">继续冒险</h2>
-              <div className="saves">
-                {sessions.map(s => (
-                  <button key={s.sessionId} className="save-row" onClick={() => onResume(s)}>
-                    <span className="save-title">
-                      {s.projections?.values.title ?? '未命名存档'}
-                    </span>
-                    <span className="save-meta">
-                      {scenarios.find(sc => sc.id === s.agentPreset)?.name ?? s.agentPreset}
-                      {' · '}
-                      {new Date(s.updatedAt).toLocaleString()}
-                      {s.parentSessionId ? ' · 分支' : ''}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
 
           {error && <div className="error">{error}</div>}
         </div>

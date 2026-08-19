@@ -10,10 +10,9 @@ interface Props {
   sessionId: string
   story?: StoryDetail
   onBack: () => void
-  onFork: (atSeq: number) => void
 }
 
-export function History({ sessionId, story, onBack, onFork }: Props) {
+export function History({ sessionId, story, onBack }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [error, setError] = useState<string>()
 
@@ -52,11 +51,6 @@ export function History({ sessionId, story, onBack, onFork }: Props) {
               <div key={m.seq ?? i} className="gm-block">
                 <span className="label">GM</span>
                 <StoryMarkdown text={narrative} characters={story?.cast.map(c => c.name) ?? []} />
-                {typeof m.seq === 'number' && (
-                  <button className="ghost fork" onClick={() => onFork(m.seq!)}>
-                    ⑂ 从此处开分支
-                  </button>
-                )}
               </div>
             )
           })}

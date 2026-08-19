@@ -61,18 +61,6 @@ export function App() {
     await enterSession(session.sessionId, session.agentPreset)
   }
 
-  const fork = async (atSeq: number) => {
-    if (!active) return
-    try {
-      const { sessionId } = await api.fork(active, atSeq)
-      await refresh()
-      setActive(sessionId)
-      setView('play')
-    } catch (err) {
-      setError(String(err))
-    }
-  }
-
   if (view === 'play' && active) {
     return (
       <Play
@@ -93,7 +81,6 @@ export function App() {
         sessionId={active}
         story={story}
         onBack={() => setView('play')}
-        onFork={seq => void fork(seq)}
       />
     )
   }

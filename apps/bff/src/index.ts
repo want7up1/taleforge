@@ -2,7 +2,7 @@
  * TaleForge 平台服务（BFF）：托管 SPA、受控转发 dsh /api、mux→SSE 桥。
  * dsh 网关无认证且只信任 loopback，本服务是唯一对外入口。
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compileAll } from '@taleforge/scenario-compiler'
@@ -184,13 +184,50 @@ app.get('/app/scenarios/:id', asyncRoute(async (req, res) => {
   })
 }))
 
+/**
+ * 单存档模式：整个平台同时只保留一个存档。
+ * 开新局即取代旧局；存档管理（多存档、分支）等项目成型后再谈。
+ */
+interface SessionSummaryLite {
+  sessionId: string
+  updatedAt: number
+  blank: boolean
+}
+
+/** 物理删除除 keepId 外的全部会话日志。dsh 没有删除 RPC，只能动文件。 */
+function pruneSessions(keepId?: string): number {
+  const root = path.join(dshHome, 'sessions')
+  if (!existsSync(root)) return 0
+  let removed = 0
+  for (const bucket of readdirSync(root, { withFileTypes: true })) {
+    if (!bucket.isDirectory()) continue
+    const bucketDir = path.join(root, bucket.name)
+    for (const entry of readdirSync(bucketDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === keepId) continue
+      rmSync(path.join(bucketDir, entry.name), { recursive: true, force: true })
+      removed++
+    }
+  }
+  return removed
+}
+
 app.get('/app/sessions', asyncRoute(async (_req, res) => {
-  res.json(await rpc('session.list', {}))
+  const { items } = await rpc<{ items: SessionSummaryLite[] }>('session.list', {})
+  // 只认最近一个真正玩过的存档，其余一律不暴露
+  const live = items
+    .filter(s => !s.blank)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 1)
+  res.json({ items: live })
 }))
 
 app.post('/app/sessions', asyncRoute(async (req, res) => {
   const { agentPreset } = (req.body ?? {}) as { agentPreset?: string }
-  res.json(await rpc('session.create', agentPreset ? { agentPreset } : {}))
+  const created = await rpc<{ sessionId: string }>('session.create', agentPreset ? { agentPreset } : {})
+  // 单存档：新局一旦建立，旧局连同调试残留一并清除
+  const removed = pruneSessions(created.sessionId)
+  if (removed > 0) console.log(`[bff] 开新局，清除旧存档 ${removed} 个`)
+  res.json(created)
 }))
 
 app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
@@ -217,12 +254,12 @@ app.post('/app/sessions/:id/cancel', asyncRoute(async (req, res) => {
   res.json(await rpc('session.cancel', { sessionId: req.params.id }))
 }))
 
-app.post('/app/sessions/:id/fork', asyncRoute(async (req, res) => {
-  const { atSeq } = (req.body ?? {}) as { atSeq?: number }
-  const payload: Record<string, unknown> = { sessionId: req.params.id }
-  if (typeof atSeq === 'number') payload.atSeq = atSeq
-  res.json(await rpc('session.fork', payload))
-}))
+// 分支存档在单存档模式下关闭；dsh 侧的 fork 能力仍在，等存档管理成型再开放
+app.post('/app/sessions/:id/fork', (_req, res) => {
+  res.status(409).json({
+    error: { code: 'single-save-mode', message: '当前为单存档模式，分支功能暂未开放' },
+  })
+})
 
 // ---- mux → SSE 桥 ----
 
