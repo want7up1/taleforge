@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Dossier } from './Dossier.tsx'
 import { foldHistory, lastTurnDigest, messageOfEvent } from './fold.ts'
+import { GmChat, type GmChatItem } from './GmChat.tsx'
 import { MeterStrip, placementOf } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
@@ -36,6 +37,9 @@ const FREE_KEY = 'E'
 const OFFSTAGE_PREFIX = '【场外】'
 /** GM 的场外回复以（场外）开头——底座场外协议规定的固定格式 */
 const isOffstageReply = (text: string) => /^\s*[（(]场外[)）]/.test(text)
+const isOffstageAsk = (text: string) => text.trimStart().startsWith(OFFSTAGE_PREFIX)
+const stripOffstage = (text: string) =>
+  text.replace(/^\s*【场外】\s*/, '').replace(/^\s*[（(]场外[)）]\s*/, '')
 
 export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -53,8 +57,10 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const [check, setCheck] = useState<CheckMeta>()
   const [scene, setScene] = useState<string>()
   const [freeMode, setFreeMode] = useState(false)
-  /** 场外通道：输入将以【场外】前缀发出，GM 以主持人身份回应 */
-  const [offstage, setOffstage] = useState(false)
+  /** 场外悬浮框开关；场外对话不进正文流 */
+  const [gmOpen, setGmOpen] = useState(false)
+  /** 当前生成中的回合是否由场外消息发起（刷新丢失时靠（场外）前缀兜底判断） */
+  const offstageTurn = useRef(false)
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [elapsed, setElapsed] = useState(0)
@@ -182,7 +188,10 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
         resetToTopRef.current()
       }
-      if (event.type === 'turn/end') setRunning(false)
+      if (event.type === 'turn/end') {
+        setRunning(false)
+        offstageTurn.current = false
+      }
 
       if (event.type === 'assistant/chunk') {
         const chunk = event.data.chunk
@@ -237,29 +246,32 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
     if (freeMode) textareaRef.current?.focus()
   }, [freeMode])
 
-  // 最近的正戏回合供正文与选项；若最新回复是场外答复，则单独展示、不顶掉正戏选项
-  const { latest, offstageReply } = useMemo(() => {
-    let reply: string | undefined
+  // 正文流只认正戏：场外往来一律剥离，进悬浮框
+  const latest = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.role !== 'assistant') continue
-      if (isOffstageReply(m.text)) {
-        if (reply === undefined) reply = m.text
-        continue
-      }
-      return { latest: parseTurn(m.text), offstageReply: reply }
+      if (m.role === 'assistant' && !isOffstageReply(m.text)) return parseTurn(m.text)
     }
-    return { latest: undefined, offstageReply: reply }
+    return undefined
   }, [messages])
+
+  /** 场外对话史：同一会话里的【场外】/（场外）消息对 */
+  const gmChatItems = useMemo<GmChatItem[]>(() =>
+    messages
+      .filter(m => (m.role === 'user' ? isOffstageAsk(m.text) : isOffstageReply(m.text)))
+      .map(m => ({ role: m.role === 'user' ? 'you' : 'gm', text: stripOffstage(m.text) })), [messages])
 
   const lastPlayerAction = useMemo(() => {
-    const index = messages.findLastIndex(m => m.role === 'user')
-    return index >= 0 ? messages[index].text : undefined
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === 'user' && !isOffstageAsk(m.text)) return m.text
+    }
+    return undefined
   }, [messages])
 
-  // 正文里最近一个场景标题，作为顶栏的"当前场景"
+  // 正文里最近一个场景标题，作为顶栏的"当前场景"（场外流不参与）
   useEffect(() => {
-    const source = streaming || latest?.narrative
+    const source = (streaming && !isOffstageReply(streaming) ? streaming : '') || latest?.narrative
     if (!source) return
     const headings = [...source.matchAll(/^#{3,4}\s+(.+)$/gm)]
     if (headings.length) setScene(headings[headings.length - 1][1])
@@ -270,17 +282,29 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
     setError(undefined)
     setFreeMode(false)
     setInput('')
-    const wasOffstage = offstage
-    setOffstage(false)
     try {
-      await api.prompt(sessionId, wasOffstage ? `${OFFSTAGE_PREFIX}${text}` : text)
+      await api.prompt(sessionId, text)
     } catch (err) {
+      setError(String(err))
+    }
+  }
+
+  const sendOffstage = async (text: string) => {
+    setError(undefined)
+    offstageTurn.current = true
+    try {
+      await api.prompt(sessionId, `${OFFSTAGE_PREFIX}${text}`)
+    } catch (err) {
+      offstageTurn.current = false
       setError(String(err))
     }
   }
 
   const characterNames = story?.cast.map(c => c.name) ?? []
   const ended = progress?.phase === 'ended'
+  // 场外回合的流式输出只进悬浮框，不打扰正文
+  const offstreaming = offstageTurn.current || isOffstageReply(streaming)
+  const mainStreaming = offstreaming ? '' : streaming
   const idle = !running && !streaming
   const options = idle && !ended ? latest?.options ?? [] : []
   // GM 没按格式给选项时也要留出路，否则玩家无处可点
@@ -318,7 +342,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
             </div>
           )}
 
-          {running && (
+          {running && !offstreaming && (
             <div className="progress">
               <div className="bar"><i /></div>
               <div className="progress-row">
@@ -331,27 +355,15 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
             </div>
           )}
 
-          {(streaming || latest) && (
+          {(mainStreaming || latest) && (
             <div className="gm-block">
               <span className="label">GM{turnNo > 0 ? ` · 第 ${turnNo} 回合` : ''}</span>
               <StoryMarkdown
-                text={streaming || latest?.narrative || ''}
+                text={mainStreaming || latest?.narrative || ''}
                 characters={characterNames}
                 onCharacter={name => setFocusCharacter(name)}
               />
-              {streaming && <span className="caret" />}
-            </div>
-          )}
-
-          {/* 场外答复单独成块，不顶掉正戏与选项 */}
-          {offstageReply && !streaming && (
-            <div className="gm-block offstage-block">
-              <span className="label">GM · 场外</span>
-              <StoryMarkdown
-                text={offstageReply.replace(/^\s*[（(]场外[)）]\s*/, '')}
-                characters={characterNames}
-                onCharacter={name => setFocusCharacter(name)}
-              />
+              {mainStreaming && <span className="caret" />}
             </div>
           )}
 
@@ -419,15 +431,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
                 </button>
               ))}
               {showFreeEntry && (
-                <button className="choice free" onClick={() => { setFreeMode(true); setOffstage(false) }}>
+                <button className="choice free" onClick={() => setFreeMode(true)}>
                   <span className="key">{FREE_KEY}</span>
                   <span className="label">其他——自己想一个行动</span>
-                </button>
-              )}
-              {showFreeEntry && (
-                <button className="choice free offstage-entry" onClick={() => { setFreeMode(true); setOffstage(true) }}>
-                  <span className="key">⌗</span>
-                  <span className="label">场外——问 GM、改设定</span>
                 </button>
               )}
             </div>
@@ -435,13 +441,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
 
           {options.length === 0 && showFreeEntry && (streaming || latest) && (
             <div className="choices">
-              <button className="choice free" onClick={() => { setFreeMode(true); setOffstage(false) }}>
+              <button className="choice free" onClick={() => setFreeMode(true)}>
                 <span className="key">{FREE_KEY}</span>
                 <span className="label">自由行动</span>
-              </button>
-              <button className="choice free offstage-entry" onClick={() => { setFreeMode(true); setOffstage(true) }}>
-                <span className="key">⌗</span>
-                <span className="label">场外——问 GM、改设定</span>
               </button>
             </div>
           )}
@@ -459,30 +461,25 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           )}
 
           {freeMode && (
-            <div className={`composer${offstage ? ' offstage' : ''}`}>
-              <span className="prompt">{offstage ? '⌗' : '>'}</span>
+            <div className="composer">
+              <span className="prompt">&gt;</span>
               <textarea
                 ref={textareaRef}
                 value={input}
                 rows={2}
-                placeholder={offstage ? '场外：问 GM，或下指令——改剧情走向、人物、设定' : '你要做什么？'}
+                placeholder="你要做什么？"
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault()
                     void send(input)
                   }
-                  if (e.key === 'Escape') {
-                    setFreeMode(false)
-                    setOffstage(false)
-                  }
+                  if (e.key === 'Escape') setFreeMode(false)
                 }}
               />
               <div className="composer-actions">
-                <button className="ghost" onClick={() => { setFreeMode(false); setOffstage(false) }}>取消</button>
-                <button onClick={() => void send(input)} disabled={!input.trim()}>
-                  {offstage ? '场外发送 ▸' : '发送 ▸'}
-                </button>
+                <button className="ghost" onClick={() => setFreeMode(false)}>取消</button>
+                <button onClick={() => void send(input)} disabled={!input.trim()}>发送 ▸</button>
               </div>
             </div>
           )}
@@ -497,6 +494,23 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           ▼ 还有内容
         </button>
       )}
+
+      {/* 场外通道：悬浮按钮 + 悬浮对话框，戏外沟通不进正文流 */}
+      <button
+        className={`gm-fab${running && offstreaming ? ' busy' : ''}${gmOpen ? ' on' : ''}`}
+        onClick={() => setGmOpen(o => !o)}
+        title="场外——问 GM、改设定"
+      >
+        GM
+      </button>
+      <GmChat
+        open={gmOpen}
+        items={gmChatItems}
+        streaming={offstreaming && streaming ? stripOffstage(streaming) : undefined}
+        busy={running && offstreaming}
+        onSend={text => void sendOffstage(text)}
+        onClose={() => setGmOpen(false)}
+      />
 
       {(dossier || focusCharacter) && story && (
         <Dossier
