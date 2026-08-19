@@ -26,9 +26,14 @@ function Bar({ def, cell }: { def: ResourceDef; cell: ResourceValue }) {
   )
 }
 
-/** 顶栏一行：只放主角自身的状态，那是每回合决策的依据 */
+/** 显示位置：剧本可选位（strip/panel/hidden）；缺省 self 组进顶栏，其余进面板 */
+export function placementOf(def: ResourceDef): 'strip' | 'panel' | 'hidden' {
+  return def.display ?? (def.group === 'self' ? 'strip' : 'panel')
+}
+
+/** 顶栏一行：剧本选定常驻的数值，玩家每回合决策的依据 */
 export function MeterStrip({ snapshot }: { snapshot: MechanicsSnapshot }) {
-  const own = snapshot.defs.filter(d => d.group === 'self')
+  const own = snapshot.defs.filter(d => placementOf(d) === 'strip')
   if (own.length === 0) return null
   return (
     <div className="meter-strip">
@@ -57,11 +62,11 @@ export function MeterPanel({ snapshot }: { snapshot: MechanicsSnapshot }) {
   return (
     <>
       {(['self', 'affinity', 'world'] as const).map((group) => {
-        const defs = snapshot.defs.filter(d => d.group === group)
+        const defs = snapshot.defs.filter(d => d.group === group && placementOf(d) !== 'hidden')
         if (defs.length === 0) return null
         return (
           <section key={group}>
-            <h3>{GROUP_TITLE[group]}</h3>
+            <h3>{snapshot.groups?.[group] ?? GROUP_TITLE[group]}</h3>
             {defs.map((def) => {
               const cell = snapshot.state[def.id]
               return cell ? <Bar key={def.id} def={def} cell={cell} /> : null

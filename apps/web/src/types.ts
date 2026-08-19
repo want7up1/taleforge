@@ -67,6 +67,8 @@ export interface ResourceDef {
   initial: number
   floor?: number
   maxStep: number
+  /** 显示位置（剧本选位）；缺省：self 组进 strip，其余 panel */
+  display?: 'strip' | 'panel' | 'hidden'
 }
 
 export interface ResourceValue {
@@ -78,6 +80,8 @@ export interface ResourceValue {
 export interface MechanicsSnapshot {
   defs: ResourceDef[]
   state: Record<string, ResourceValue>
+  /** 剧本自定义的分组标题 */
+  groups?: Partial<Record<ResourceDef['group'], string>>
 }
 
 /** tool/result.meta 里的一次结算（资源与属性同构） */

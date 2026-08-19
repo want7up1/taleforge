@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Dossier } from './Dossier.tsx'
 import { foldHistory, lastTurnDigest, messageOfEvent } from './fold.ts'
-import { MeterStrip } from './Meters.tsx'
+import { MeterStrip, placementOf } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { parseTurn } from './turn.ts'
@@ -378,7 +378,11 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           {(settlement.length > 0 || invChanges.length > 0) && !running && (
             <div className="settlement">
               <span className="settlement-title">本回合结算</span>
-              {settlement.map((c, i) => (
+              {settlement.filter((c) => {
+                // 剧本声明为 hidden 的数值只记账不展示（界面约定，GM 侧照常可见）
+                const def = mechanics?.defs.find(d => d.id === c.id)
+                return !(def && placementOf(def) === 'hidden')
+              }).map((c, i) => (
                 <div key={`${c.id}-${i}`} className="settlement-row">
                   <b className={c.applied > 0 ? 'up' : 'down'}>
                     {c.applied > 0 ? `+${c.applied}` : c.applied}

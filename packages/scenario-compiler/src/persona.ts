@@ -135,7 +135,7 @@ export function renderPersona(story: Story): string {
   if (mech?.resources) {
     mechSections.push(`## 资源面板
 
-${mech.resources.map(r => `- \`${r.id}\` **${r.label}**（${r.min}–${r.max}，当前区段含义见下）\n  ${r.guidance}`).join('\n')}
+${mech.resources.map(r => `- \`${r.id}\` **${r.label}**（${r.min}–${r.max}，当前区段含义见下）${r.display === 'hidden' ? '【此条对玩家隐藏：界面不显示，正文更不得让玩家察觉它的存在】' : ''}\n  ${r.guidance}`).join('\n')}
 
 结算规则（回合固定流程中调用 \`adjust_resources\`）：
 

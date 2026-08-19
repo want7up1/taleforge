@@ -198,3 +198,24 @@ test('回合固定流程紧随剧本数据、位于输出契约之前，终幕�
   assert.match(persona, /——剧终——/)
   assert.match(persona, /revise_setting/)
 })
+
+test('显示选位与分组标题：display 三值合法、hidden 在 persona 里标注、groups 可自定义', () => {
+  const withDisplay = storySchema.parse({
+    ...story,
+    mechanics: {
+      groups: { affinity: '红颜' },
+      resources: [
+        { id: 'lust', label: '欲望', group: 'self', min: 0, max: 100, initial: 10, maxStep: 40, guidance: 'x', display: 'strip' },
+        { id: 'doom', label: '倒计时', group: 'world', min: 0, max: 30, initial: 30, maxStep: 5, guidance: 'x', display: 'hidden' },
+      ],
+    },
+  })
+  assert.equal(withDisplay.mechanics?.resources?.[1].display, 'hidden')
+  assert.equal(withDisplay.mechanics?.groups?.affinity, '红颜')
+  const persona = renderPersona(withDisplay)
+  assert.match(persona, /此条对玩家隐藏/)
+  assert.throws(() => storySchema.parse({
+    ...story,
+    mechanics: { resources: [{ id: 'x', label: 'x', group: 'self', min: 0, max: 1, initial: 0, maxStep: 1, guidance: 'x', display: 'popup' }] },
+  }), '未知位置必须被拒绝')
+})

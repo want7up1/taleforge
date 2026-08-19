@@ -27,7 +27,12 @@ export interface ResourceDef {
   floor?: number
   /** 单次调整的绝对值上限，防止模型一口气 +50 让数值失去意义 */
   maxStep: number
+  /** 显示位置（平台枚举，剧本选位）；缺省：self 组进 strip，其余 panel */
+  display?: 'strip' | 'panel' | 'hidden'
 }
+
+/** 侧栏分组标题自定义 */
+export type GroupTitles = Partial<Record<ResourceDef['group'], string>>
 
 export interface ResourceChange {
   id: string

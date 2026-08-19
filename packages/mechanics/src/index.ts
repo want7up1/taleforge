@@ -27,6 +27,7 @@ import {
   type AttributeDef,
   type CheckConfig,
   type CheckResult,
+  type GroupTitles,
   type InventoryConfig,
   type InventoryState,
   type NumericDef,
@@ -55,8 +56,14 @@ const mechanicsSchema = z.object({
     initial: z.number(),
     floor: z.number().optional(),
     maxStep: z.number(),
+    display: z.enum(['strip', 'panel', 'hidden']).optional(),
   })),
   state: numericStateSchema,
+  groups: z.object({
+    self: z.string().optional(),
+    affinity: z.string().optional(),
+    world: z.string().optional(),
+  }).optional(),
 })
 
 const attributesSchema = z.object({
@@ -83,7 +90,7 @@ const inventorySchema = z.object({
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
     /** 玩家可见的资源快照 */
-    mechanics: { defs: ResourceDef[]; state: ResourceState } | null
+    mechanics: { defs: ResourceDef[]; state: ResourceState; groups?: GroupTitles } | null
     /** 属性表快照 */
     attributes: { defs: Omit<AttributeDef, 'guidance'>[]; state: ResourceState } | null
     /** 物品栏快照 */
@@ -96,6 +103,8 @@ export interface Config {
   attributes?: AttributeDef[]
   checks?: CheckConfig
   inventory?: InventoryConfig
+  /** 侧栏分组标题自定义（strip/panel/hidden 的选位在各资源的 display 字段上） */
+  groups?: GroupTitles
 }
 
 export const name = 'taleforge-mechanics'
@@ -279,6 +288,7 @@ export function apply(ctx: Context, config: Config) {
         view: (state: NumericProjState) => ({
           defs: effectiveNumericDefs(resources, state.revisions, 'resource'),
           state: state.values,
+          groups: config?.groups,
         }),
         stateVersion: 2,
       })

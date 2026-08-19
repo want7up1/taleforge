@@ -82,6 +82,11 @@ export const storySchema = z.object({
         maxStep: z.number().int().positive(),
         /** 什么情况加减多少、各区段含义——数值必须自带含义 */
         guidance: z.string().min(1),
+        /**
+         * 显示位置（平台枚举，剧本选位）：strip=顶栏常驻，panel=卷宗面板，
+         * hidden=只记账不展示（GM 可见玩家不可见）。缺省：self 组进 strip，其余 panel。
+         */
+        display: z.enum(['strip', 'panel', 'hidden']).optional(),
       })).min(1).optional(),
       /** 属性表：变动稀少的能力值，判定自动引用作修正 */
       attributes: z.array(z.object({
@@ -100,6 +105,12 @@ export const storySchema = z.object({
         die: z.enum(['d20', 'd100', '2d6']).default('d20'),
         /** 何时必须掷、难度分几档各是多少——机械规则 */
         guidance: z.string().min(1),
+      }).optional(),
+      /** 侧栏分组标题自定义；不声明用平台默认（你/她们/世界） */
+      groups: z.object({
+        self: z.string().min(1).optional(),
+        affinity: z.string().min(1).optional(),
+        world: z.string().min(1).optional(),
       }).optional(),
       /** 物品栏：id 引用 + 纯 upsert */
       inventory: z.object({
