@@ -81,10 +81,14 @@ body::after {
   height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr); /* 子项可收缩，越宽内容不得撑开网格 */
   position: relative;
 }
 
 .scroll {
+  /* 纵向滚动容器绝不横向滚动：overflow-y 一旦设置，overflow-x 会隐式变 auto，
+     任何越宽的子元素都会把整页横向撑开（移动端实测）——在此一律禁止 */
+  overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
@@ -94,11 +98,13 @@ body::after {
 
 .column {
   width: min(840px, 100%);
+  max-width: 100%;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
+.column > * { min-width: 0; }
 
 /* ---- 顶栏 ---- */
 
@@ -183,7 +189,13 @@ body::after {
 }
 
 /* 正文用衬线，与等宽的界面刻意反差 */
-.story { font-family: var(--serif); font-size: 1.06rem; line-height: 2; }
+.story {
+  font-family: var(--serif);
+  font-size: 1.06rem;
+  line-height: 2;
+  /* 长的非中文串（英文、数字、符号连排）强制断行，不许撑宽 */
+  overflow-wrap: anywhere;
+}
 .story p { margin-bottom: 1.1em; }
 .story p:last-child { margin-bottom: 0; }
 
