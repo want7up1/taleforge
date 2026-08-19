@@ -64,6 +64,11 @@ export const storySchema = z.object({
         floor: z.number().int().optional(),
         /** 单次调整上限，防止模型让数值失去意义 */
         maxStep: z.number().int().positive(),
+        /**
+         * 这条资源的语义：什么情况加、什么情况减、不同区段代表什么。
+         * 直接进 GM 提示词——数值必须自带含义，否则模型不知道 30 和 70 差在哪。
+         */
+        guidance: z.string().min(1),
       })).min(1),
     })
     .optional(),
