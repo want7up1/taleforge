@@ -204,9 +204,10 @@ body::after {
   flex-shrink: 0;
 }
 
-/* 加粗只加重量、不放大，避免 GM 用加粗凑存在感 */
-.story strong { font-weight: 650; color: var(--fg); }
-.story em { font-style: italic; color: var(--muted); }
+/* 加粗只换色、不放大字号——放大会让 GM 有动机拿加粗凑存在感 */
+.story strong { font-weight: 600; color: var(--amber); }
+/* 斜体是内心与低语，该往后退而不是跳出来 */
+.story em { font-style: italic; color: var(--muted); opacity: 0.92; }
 
 .story code {
   font-family: var(--mono);
