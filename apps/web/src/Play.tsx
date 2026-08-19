@@ -5,13 +5,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Dossier } from './Dossier.tsx'
-import { foldHistory, lastSettlement, messageOfEvent } from './fold.ts'
+import { foldHistory, lastTurnDigest, messageOfEvent } from './fold.ts'
 import { MeterStrip } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { parseTurn } from './turn.ts'
 import type {
+  AttributesSnapshot,
   ChatMessage,
+  CheckMeta,
+  InventoryChange,
+  InventorySnapshot,
   MechanicsChange,
   MechanicsSnapshot,
   ModelCatalog,
@@ -39,9 +43,14 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const [running, setRunning] = useState(false)
   const [stats, setStats] = useState<SessionStats>()
   const [mechanics, setMechanics] = useState<MechanicsSnapshot>()
+  const [attributes, setAttributes] = useState<AttributesSnapshot>()
+  const [inventory, setInventory] = useState<InventorySnapshot>()
   const [progress, setProgress] = useState<ProgressSnapshot>()
-  /** 本回合的结算明细，跟着正文一起显示 */
+  /** 本回合的结算明细（资源+属性），跟着正文一起显示 */
   const [settlement, setSettlement] = useState<MechanicsChange[]>([])
+  /** 本回合的物品变动与判定 */
+  const [invChanges, setInvChanges] = useState<InventoryChange[]>([])
+  const [check, setCheck] = useState<CheckMeta>()
   const [scene, setScene] = useState<string>()
   const [freeMode, setFreeMode] = useState(false)
   /** 场外通道：输入将以【场外】前缀发出，GM 以主持人身份回应 */
@@ -102,10 +111,15 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
       .then(({ events, projections }) => {
         if (cancelled) return
         setMessages(foldHistory(events))
-        // 打开存档时立刻还原数值、幕进度与最近一次结算，不必等下一回合
+        // 打开存档时立刻还原数值、幕进度与最近一回合的机制事件，不必等下一回合
         if (projections?.values.mechanics) setMechanics(projections.values.mechanics)
+        if (projections?.values.attributes) setAttributes(projections.values.attributes)
+        if (projections?.values.inventory) setInventory(projections.values.inventory)
         if (projections?.values.progress) setProgress(projections.values.progress)
-        setSettlement(lastSettlement(events))
+        const digest = lastTurnDigest(events)
+        setSettlement(digest.settlement)
+        setInvChanges(digest.inventory)
+        setCheck(digest.check)
         resetToTopRef.current()
         // 新会话并非空日志（dsh 先写权限/沙箱等配置事件），只有 turn/start 能证明对话开过；
         // 用它判断还能挡住"首回合生成中刷新页面"导致的重复开场。
@@ -128,6 +142,14 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         setMechanics(frame.value as MechanicsSnapshot)
         return
       }
+      if (frame.type === 'session/projection' && frame.key === 'attributes') {
+        setAttributes(frame.value as AttributesSnapshot)
+        return
+      }
+      if (frame.type === 'session/projection' && frame.key === 'inventory') {
+        setInventory(frame.value as InventorySnapshot)
+        return
+      }
       if (frame.type === 'session/projection' && frame.key === 'progress') {
         setProgress(frame.value as ProgressSnapshot)
         return
@@ -135,12 +157,17 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
       if (frame.type !== 'session/event' || !frame.event) return
       const event = frame.event
 
-      // 结算明细从 tool/result 的 meta 取，与正文同回合展示
+      // 机制事件从 tool/result 的 meta 取，与正文同回合展示（turn/start 时清零）
       if (event.type === 'tool/result') {
-        const meta = (event.data as { meta?: { kind?: string; changes?: MechanicsChange[] } }).meta
-        if (meta?.kind === 'mechanics/resources' && meta.changes?.length) {
-          setSettlement(meta.changes)
+        const meta = (event.data as { meta?: { kind?: string; changes?: unknown[] } }).meta
+        if (!meta?.kind) return
+        if ((meta.kind === 'mechanics/resources' || meta.kind === 'mechanics/attributes') && meta.changes?.length) {
+          setSettlement(prev => [...prev, ...(meta.changes as MechanicsChange[])])
         }
+        if (meta.kind === 'mechanics/inventory' && meta.changes?.length) {
+          setInvChanges(prev => [...prev, ...(meta.changes as InventoryChange[])])
+        }
+        if (meta.kind === 'mechanics/check') setCheck(meta as unknown as CheckMeta)
         return
       }
 
@@ -150,6 +177,8 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         setRunning(true)
         setStreaming('')
         setSettlement([])
+        setInvChanges([])
+        setCheck(undefined)
         // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
         resetToTopRef.current()
       }
@@ -330,19 +359,47 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
             <p className="dim">正在开场…</p>
           )}
 
-          {settlement.length > 0 && !running && (
+          {/* 判定卡片：代码权威的掷骰结果，数字只出现在这里，不进正文 */}
+          {check && !running && (
+            <div className={`check-card o-${check.outcome}`}>
+              <span className="check-reason">⚄ {check.reason}</span>
+              <span className="check-math">
+                {check.die} = {check.roll}
+                {check.attribute ? ` + ${check.attrValue}` : ''}
+                {check.modifier !== 0 ? ` ${check.modifier > 0 ? '+' : '−'} ${Math.abs(check.modifier)}` : ''}
+                {' '}vs 难度 {check.difficulty}
+              </span>
+              <b className="check-outcome">
+                {{ 'crit-success': '大成功', 'success': '成功', 'fail': '失败', 'crit-fail': '大失败' }[check.outcome]}
+              </b>
+            </div>
+          )}
+
+          {(settlement.length > 0 || invChanges.length > 0) && !running && (
             <div className="settlement">
               <span className="settlement-title">本回合结算</span>
-              {settlement.map(c => (
-                <div key={c.id} className="settlement-row">
+              {settlement.map((c, i) => (
+                <div key={`${c.id}-${i}`} className="settlement-row">
                   <b className={c.applied > 0 ? 'up' : 'down'}>
                     {c.applied > 0 ? `+${c.applied}` : c.applied}
                   </b>
                   <span className="settlement-label">
-                    {mechanics?.defs.find(d => d.id === c.id)?.label ?? c.id}
+                    {mechanics?.defs.find(d => d.id === c.id)?.label
+                      ?? attributes?.defs.find(d => d.id === c.id)?.label
+                      ?? c.id}
                   </span>
                   <span className="settlement-after">→ {c.after}</span>
                   <span className="settlement-reason">{c.reason}</span>
+                </div>
+              ))}
+              {invChanges.map((c, i) => (
+                <div key={`inv-${c.id}-${i}`} className="settlement-row">
+                  <b className={c.delta >= 0 && !c.removed ? 'up' : 'down'}>
+                    {c.removed ? '－' : c.delta >= 0 ? `+${c.delta}` : c.delta}
+                  </b>
+                  <span className="settlement-label">{c.name}</span>
+                  <span className="settlement-after">{c.removed ? '已失去' : `现有 ${c.qty}`}</span>
+                  {c.reason && <span className="settlement-reason">{c.reason}</span>}
                 </div>
               ))}
             </div>
@@ -442,6 +499,8 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           story={story}
           stats={stats}
           mechanics={mechanics}
+          attributes={attributes}
+          inventory={inventory}
           progress={progress}
           focus={focusCharacter}
           onClose={() => {

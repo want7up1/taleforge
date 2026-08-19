@@ -31,7 +31,8 @@ export interface ProgressConfig {
 
 /**
  * 设定修订：场外由 GM 落账，只对未来生效，效力高于剧本原文。
- * anchor 类修订会真实改写幕结构的折叠结果；其余是回注给 GM 的文本指令。
+ * anchor 类修订改写幕结构的折叠结果；resource/attribute 类改写机制定义的折叠结果
+ * （只允许 edit 既有条目——中途增删数值条目走"落盘+新局"）；其余是回注给 GM 的文本指令。
  */
 export type Revision =
   | { target: 'world'; text: string }
@@ -46,6 +47,19 @@ export type Revision =
     signal?: string
     required?: boolean
   }
+  | {
+    target: 'resource' | 'attribute'
+    id: string
+    label?: string
+    guidance?: string
+    min?: number
+    max?: number
+    maxStep?: number
+    floor?: number
+  }
+
+/** 机制引擎侧消费的数值定义修订（Revision 的 resource/attribute 分支）。 */
+export type NumericRevision = Extract<Revision, { target: 'resource' | 'attribute' }>
 
 export interface ProgressState {
   actIndex: number

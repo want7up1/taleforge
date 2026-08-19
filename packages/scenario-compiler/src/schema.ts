@@ -61,9 +61,14 @@ export const storySchema = z.object({
     hook: z.string().min(1),
   }),
   acts: z.array(actSchema).min(1),
-  /** 本剧本启用的资源条；省略即纯叙事，不加载机制引擎。 */
+  /**
+   * 机制货架的选调——四件套各自显式声明，声明哪个挂哪个；省略整段即纯叙事。
+   * 每个模块的 guidance 直接进 GM 提示词，用机械规则写（给类型、给数字），
+   * 别写"该记的时候记"。
+   */
   mechanics: z
     .object({
+      /** 资源条：随剧情涨落的数值（好感、体力、物资……） */
       resources: z.array(z.object({
         id: z.string().regex(/^[a-z][a-z0-9]*(:[a-z][a-z0-9-]*)?$/, '资源 id 形如 evolution 或 affinity:suwan'),
         label: z.string().min(1),
@@ -75,14 +80,40 @@ export const storySchema = z.object({
         floor: z.number().int().optional(),
         /** 单次调整上限，防止模型让数值失去意义 */
         maxStep: z.number().int().positive(),
-        /**
-         * 这条资源的语义：什么情况加、什么情况减、不同区段代表什么。
-         * 直接进 GM 提示词——数值必须自带含义，否则模型不知道 30 和 70 差在哪。
-         * 用机械规则写（给类型、给数字），别写"该加的时候加"。
-         */
+        /** 什么情况加减多少、各区段含义——数值必须自带含义 */
         guidance: z.string().min(1),
-      })).min(1),
+      })).min(1).optional(),
+      /** 属性表：变动稀少的能力值，判定自动引用作修正 */
+      attributes: z.array(z.object({
+        id: z.string().regex(/^[a-z][a-z0-9-]*$/),
+        label: z.string().min(1),
+        initial: z.number().int(),
+        min: z.number().int().default(0),
+        max: z.number().int().default(20),
+        /** 属性变动稀少，单步默认 1 */
+        maxStep: z.number().int().positive().default(1),
+        /** 这条属性衡量什么、什么剧情事件才配让它变动 */
+        guidance: z.string().min(1),
+      })).min(1).optional(),
+      /** 判定（骰子）：成败不确定的行动交给代码掷骰裁决 */
+      checks: z.object({
+        die: z.enum(['d20', 'd100', '2d6']).default('d20'),
+        /** 何时必须掷、难度分几档各是多少——机械规则 */
+        guidance: z.string().min(1),
+      }).optional(),
+      /** 物品栏：id 引用 + 纯 upsert */
+      inventory: z.object({
+        /** 什么算需要入账的物品、什么不算（机械规则） */
+        guidance: z.string().min(1),
+        initial: z.array(z.object({
+          id: z.string().regex(/^[a-z][a-z0-9-]*$/),
+          name: z.string().min(1),
+          qty: z.number().int().positive().default(1),
+          note: z.string().optional(),
+        })).default([]),
+      }).optional(),
     })
+    .refine(m => m.resources || m.attributes || m.checks || m.inventory, '声明了 mechanics 就至少要启用一个模块')
     .optional(),
   /**
    * 工艺声明——显式、无隐藏默认。modules 必填（可为空数组 = 只要底座结构保证）；

@@ -69,6 +69,11 @@ export function compileScenario(
       config: {
         acts: story.acts,
         cast: story.cast.map(c => ({ id: c.id, name: c.name })),
+        // 数值条目名录：供场外修订（resource/attribute 目标）的校验与显示
+        numeric: {
+          resources: story.mechanics?.resources?.map(r => ({ id: r.id, label: r.label })) ?? [],
+          attributes: story.mechanics?.attributes?.map(a => ({ id: a.id, label: a.label })) ?? [],
+        },
       },
     })
   }
@@ -77,7 +82,8 @@ export function compileScenario(
     composition.push({
       id: 'mechanics',
       name: entries.mechanics,
-      config: { resources: story.mechanics.resources },
+      // 整段声明原样交给机制引擎，声明哪个模块就注册哪个模块
+      config: story.mechanics,
     })
   }
 

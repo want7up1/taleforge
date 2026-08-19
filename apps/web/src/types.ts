@@ -80,7 +80,7 @@ export interface MechanicsSnapshot {
   state: Record<string, ResourceValue>
 }
 
-/** tool/result.meta 里的一次结算 */
+/** tool/result.meta 里的一次结算（资源与属性同构） */
 export interface MechanicsChange {
   id: string
   applied: number
@@ -88,6 +88,42 @@ export interface MechanicsChange {
   after: number
   reason: string
   clamped: boolean
+}
+
+/** attributes projection 的载荷 */
+export interface AttributesSnapshot {
+  defs: { id: string; label: string; min: number; max: number; initial: number; maxStep: number }[]
+  state: Record<string, ResourceValue>
+}
+
+/** inventory projection 的载荷 */
+export interface InventorySnapshot {
+  items: { id: string; name: string; qty: number; note?: string }[]
+}
+
+/** tool/result.meta 里的一次物品变动 */
+export interface InventoryChange {
+  op: string
+  id: string
+  name: string
+  qty: number
+  delta: number
+  removed: boolean
+  note?: string
+  reason?: string
+}
+
+/** tool/result.meta 里的一次判定裁决 */
+export interface CheckMeta {
+  die: string
+  roll: number
+  attribute?: string
+  attrValue: number
+  modifier: number
+  total: number
+  difficulty: number
+  outcome: 'crit-success' | 'success' | 'fail' | 'crit-fail'
+  reason: string
 }
 
 export interface SessionStats {
@@ -169,6 +205,8 @@ export interface ProjectionsBlock {
   asOfSeq: number
   values: {
     mechanics?: MechanicsSnapshot | null
+    attributes?: AttributesSnapshot | null
+    inventory?: InventorySnapshot | null
     progress?: ProgressSnapshot | null
     sessionStats?: SessionStats
   }

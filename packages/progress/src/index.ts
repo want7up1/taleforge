@@ -63,6 +63,11 @@ export interface Config {
   acts: ActDef[]
   /** 出场人物名录，供修订校验与显示 */
   cast?: { id: string; name: string }[]
+  /** 机制条目名录（资源/属性），供数值定义修订的校验与显示 */
+  numeric?: {
+    resources?: { id: string; label: string }[]
+    attributes?: { id: string; label: string }[]
+  }
 }
 
 export const name = 'taleforge-progress'
@@ -131,7 +136,9 @@ export function apply(ctx: Context, config: Config) {
     description: '【场外专用】修订剧本设定，玩家在场外明确要求修改时调用。'
       + '修订立即落账、只对未来剧情生效、效力高于剧本原文。'
       + 'target 取值：world（世界设定补充/覆盖）、cast（修改某人物，需 id）、'
-      + 'direction（剧情走向/风格指令）、anchor（增删改锚点，需 act、op、id）。',
+      + 'direction（剧情走向/风格指令）、anchor（增删改锚点，需 act、op、id）、'
+      + 'resource / attribute（修改既有数值条目的语义或边界，需 id，'
+      + '可改 label/guidance/min/max/maxStep/floor；不支持中途增删条目）。',
     parameters: {
       revisions: {
         type: 'array',
@@ -141,13 +148,19 @@ export function apply(ctx: Context, config: Config) {
           type: 'object',
           additionalProperties: false,
           properties: {
-            target: { type: 'string', required: true, description: 'world | cast | direction | anchor' },
-            id: { type: 'string', description: 'cast：人物 id；anchor：锚点 id' },
+            target: { type: 'string', required: true, description: 'world | cast | direction | anchor | resource | attribute' },
+            id: { type: 'string', description: 'cast：人物 id；anchor：锚点 id；resource/attribute：条目 id' },
             act: { type: 'string', description: 'anchor 专用：所属幕 id' },
             op: { type: 'string', description: 'anchor 专用：add | edit | remove' },
             text: { type: 'string', description: '修订内容（world/cast/direction 必填；anchor 为锚点描述）' },
             signal: { type: 'string', description: 'anchor 专用：完成信号' },
             required: { type: 'boolean', description: 'anchor 专用：是否必需' },
+            label: { type: 'string', description: 'resource/attribute：新显示名' },
+            guidance: { type: 'string', description: 'resource/attribute：新的数值语义（何时加减多少、区段含义）' },
+            min: { type: 'integer', description: 'resource/attribute：新下限' },
+            max: { type: 'integer', description: 'resource/attribute：新上限' },
+            maxStep: { type: 'integer', description: 'resource/attribute：新单步上限' },
+            floor: { type: 'integer', description: 'resource 专用：新下限护栏' },
           },
         },
       },
@@ -196,6 +209,7 @@ export function apply(ctx: Context, config: Config) {
         (args.revisions as Record<string, unknown>[]) ?? [],
         acts,
         cast,
+        config?.numeric,
       )
       const lines = [
         accepted.length ? `已落账 ${accepted.length} 条修订，即刻生效，此后正戏必须遵守。` : '没有可落账的修订。',
@@ -238,12 +252,37 @@ export function validateRevisions(
   entries: Record<string, unknown>[],
   acts: ActDef[],
   cast: { id: string; name: string }[],
+  numeric?: Config['numeric'],
 ): { accepted: Revision[]; rejected: { index: number; reason: string }[] } {
   const accepted: Revision[] = []
   const rejected: { index: number; reason: string }[] = []
+  const intOrUndef = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : undefined)
   entries.forEach((raw, index) => {
     const target = raw.target
     const text = typeof raw.text === 'string' ? raw.text.trim() : ''
+    if (target === 'resource' || target === 'attribute') {
+      const id = String(raw.id ?? '')
+      const known = (target === 'resource' ? numeric?.resources : numeric?.attributes) ?? []
+      if (!known.some(n => n.id === id)) {
+        return rejected.push({ index, reason: `${target} id 不存在：${id}（中途增删条目走落盘+新局）` }) && undefined
+      }
+      const fields = {
+        label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : undefined,
+        guidance: typeof raw.guidance === 'string' && raw.guidance.trim() ? raw.guidance.trim() : undefined,
+        min: intOrUndef(raw.min),
+        max: intOrUndef(raw.max),
+        maxStep: intOrUndef(raw.maxStep),
+        floor: target === 'resource' ? intOrUndef(raw.floor) : undefined,
+      }
+      if (Object.values(fields).every(v => v === undefined)) {
+        return rejected.push({ index, reason: '至少给一个要修改的字段（label/guidance/min/max/maxStep/floor）' }) && undefined
+      }
+      if (fields.maxStep !== undefined && fields.maxStep <= 0) {
+        return rejected.push({ index, reason: 'maxStep 必须为正' }) && undefined
+      }
+      accepted.push({ target, id, ...fields })
+      return
+    }
     if (target === 'world' || target === 'direction') {
       if (!text) return rejected.push({ index, reason: 'text 不能为空' }) && undefined
       accepted.push({ target, text })
@@ -335,6 +374,15 @@ export function renderBrief(
       if (r.target === 'cast') {
         const who = cast.find(c => c.id === r.id)?.name ?? r.id
         lines.push(`- [人物·${who}] ${r.text}`)
+      }
+      if (r.target === 'resource' || r.target === 'attribute') {
+        const parts: string[] = []
+        if (r.label !== undefined) parts.push(`改名「${r.label}」`)
+        if (r.min !== undefined || r.max !== undefined) parts.push(`区间 ${r.min ?? '原'}–${r.max ?? '原'}`)
+        if (r.maxStep !== undefined) parts.push(`单步 ±${r.maxStep}`)
+        if (r.floor !== undefined) parts.push(`下限护栏 ${r.floor}`)
+        if (r.guidance !== undefined) parts.push(`语义改为：${r.guidance}`)
+        lines.push(`- [${r.target === 'resource' ? '资源' : '属性'}·${r.id}] ${parts.join('；')}`)
       }
     }
   }

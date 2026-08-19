@@ -876,3 +876,38 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
 .anchor-list li { color: var(--faint); font-size: 0.85rem; line-height: 1.7; }
 .anchor-list li.done { color: var(--phosphor-dim); }
 .act-row.on { border-left: 2px solid var(--phosphor-dim); padding-left: 0.6rem; }
+
+/* ---- F3：判定卡片 / 属性表 / 物品栏 ---- */
+
+.check-card {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin: 0.8rem 0 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--phosphor-dim);
+  border-radius: 4px;
+  background: var(--panel-strong);
+  font-size: 0.9rem;
+}
+.check-card .check-reason { color: var(--fg); font-weight: 600; }
+.check-card .check-math { color: var(--faint); font-family: var(--mono); }
+.check-card .check-outcome { margin-left: auto; letter-spacing: 0.2em; }
+.check-card.o-success .check-outcome,
+.check-card.o-crit-success .check-outcome { color: var(--phosphor); }
+.check-card.o-fail .check-outcome,
+.check-card.o-crit-fail .check-outcome { color: var(--danger); }
+.check-card.o-crit-success { border-left-color: var(--phosphor); }
+.check-card.o-crit-fail { border-left-color: var(--danger); }
+
+.attr-table { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.3rem 1.2rem; }
+.attr-row { display: flex; justify-content: space-between; border-bottom: 1px dashed var(--border); padding: 0.25rem 0; }
+.attr-row span { color: var(--muted); }
+.attr-row b { color: var(--phosphor); font-family: var(--mono); }
+
+.inv-row { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.25rem 0; border-bottom: 1px dashed var(--border); }
+.inv-row .name { color: var(--fg); }
+.inv-row .inv-qty { color: var(--amber); font-family: var(--mono); }
+.inv-row .muted { font-size: 0.82rem; }

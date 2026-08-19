@@ -155,3 +155,25 @@ test('全可选的幕会被直接穿过', () => {
   const out = applyReport(initialProgress(), softActs, [])
   assert.equal(out.state.actIndex, 1, '无必需锚点的幕在首次上报时穿过')
 })
+
+test('数值定义修订校验：未知 id 拒绝、空字段拒绝、合法条目规范化', () => {
+  const numeric = { resources: [{ id: 'hp', label: '体力' }], attributes: [{ id: 'str', label: '力量' }] }
+  const { accepted, rejected } = validateRevisions(
+    [
+      { target: 'resource', id: 'hp', guidance: '新语义', max: 80 },
+      { target: 'resource', id: 'nope', max: 10 },
+      { target: 'attribute', id: 'str', maxStep: 2 },
+      { target: 'attribute', id: 'str' },
+      { target: 'resource', id: 'hp', maxStep: 0 },
+    ],
+    acts,
+    [],
+    numeric,
+  )
+  assert.equal(accepted.length, 2)
+  assert.equal(rejected.length, 3)
+  assert.deepEqual(accepted[0], {
+    target: 'resource', id: 'hp', label: undefined, guidance: '新语义',
+    min: undefined, max: 80, maxStep: undefined, floor: undefined,
+  })
+})

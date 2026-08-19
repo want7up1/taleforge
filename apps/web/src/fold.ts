@@ -1,8 +1,10 @@
 /** 会话事件 → 聊天消息的折叠逻辑（M0：只认 user/message 与 assistant/message 的 text 块）。 */
 import type {
   ChatMessage,
+  CheckMeta,
   ContentBlock,
   HistoryEntry,
+  InventoryChange,
   MechanicsChange,
   SessionEvent,
 } from './types.ts'
@@ -28,15 +30,36 @@ export function messageOfEvent(event: SessionEvent): ChatMessage | undefined {
   return undefined
 }
 
-/** 取最近一次机制结算，供刷新页面后仍能看到本回合的数值变化。 */
-export function lastSettlement(entries: HistoryEntry[]): MechanicsChange[] {
+export interface TurnDigest {
+  settlement: MechanicsChange[]
+  inventory: InventoryChange[]
+  check?: CheckMeta
+}
+
+/** 汇总最近一个回合的机制事件（结算/物品/判定），供刷新页面后仍能看到本回合变化。 */
+export function lastTurnDigest(entries: HistoryEntry[]): TurnDigest {
+  let lastTurnStart = -1
   for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].event.type === 'turn/start') {
+      lastTurnStart = i
+      break
+    }
+  }
+  const digest: TurnDigest = { settlement: [], inventory: [] }
+  for (let i = Math.max(0, lastTurnStart); i < entries.length; i++) {
     const event = entries[i].event
     if (event.type !== 'tool/result') continue
-    const meta = (event.data as { meta?: { kind?: string; changes?: MechanicsChange[] } }).meta
-    if (meta?.kind === 'mechanics/resources') return meta.changes ?? []
+    const meta = (event.data as { meta?: { kind?: string; changes?: unknown[] } }).meta
+    if (!meta?.kind) continue
+    if (meta.kind === 'mechanics/resources' || meta.kind === 'mechanics/attributes') {
+      digest.settlement.push(...(meta.changes as MechanicsChange[] ?? []))
+    }
+    if (meta.kind === 'mechanics/inventory') {
+      digest.inventory.push(...(meta.changes as InventoryChange[] ?? []))
+    }
+    if (meta.kind === 'mechanics/check') digest.check = meta as unknown as CheckMeta
   }
-  return []
+  return digest
 }
 
 export function foldHistory(entries: HistoryEntry[]): ChatMessage[] {

@@ -1,18 +1,27 @@
 /** 卷宗抽屉：剧本静态信息 + 幕进度 + 会话统计。数据全部来自投影与剧本详情。 */
 import { useEffect } from 'react'
 import { MeterPanel } from './Meters.tsx'
-import type { MechanicsSnapshot, ProgressSnapshot, SessionStats, StoryDetail } from './types.ts'
+import type {
+  AttributesSnapshot,
+  InventorySnapshot,
+  MechanicsSnapshot,
+  ProgressSnapshot,
+  SessionStats,
+  StoryDetail,
+} from './types.ts'
 
 interface Props {
   story: StoryDetail
   stats?: SessionStats
   mechanics?: MechanicsSnapshot
+  attributes?: AttributesSnapshot
+  inventory?: InventorySnapshot
   progress?: ProgressSnapshot
   focus?: string
   onClose: () => void
 }
 
-export function Dossier({ story, stats, mechanics, progress, focus, onClose }: Props) {
+export function Dossier({ story, stats, mechanics, attributes, inventory, progress, focus, onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -40,6 +49,33 @@ export function Dossier({ story, stats, mechanics, progress, focus, onClose }: P
         )}
 
         {mechanics && <MeterPanel snapshot={mechanics} />}
+
+        {attributes && attributes.defs.length > 0 && (
+          <section>
+            <h3>属性</h3>
+            <div className="attr-table">
+              {attributes.defs.map(d => (
+                <div key={d.id} className="attr-row">
+                  <span>{d.label}</span>
+                  <b>{attributes.state[d.id]?.value ?? d.initial}</b>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {inventory && inventory.items.length > 0 && (
+          <section>
+            <h3>物品</h3>
+            {inventory.items.map(it => (
+              <div key={it.id} className="inv-row">
+                <span className="name">{it.name}</span>
+                {it.qty > 1 && <b className="inv-qty">×{it.qty}</b>}
+                {it.note && <span className="muted">{it.note}</span>}
+              </div>
+            ))}
+          </section>
+        )}
 
         <section>
           <h3>主角</h3>
