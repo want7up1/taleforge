@@ -338,5 +338,11 @@ export function renderBrief(
       }
     }
   }
+
+  // 输出契约的贴身提醒：工具返回值是离生成点最近的文本，契约在 persona 末尾会被两次
+  // 工具调用挤远——实测开场回合因此漏掉行动块。凡正戏回合都在此重申，终幕回合除外。
+  if (!outcome.ended && state.phase === 'playing') {
+    lines.push('提醒：本回合正文结尾必须有【行动】块——独占一行的【行动】加 A. B. C. D. 四行具体选项，缺了玩家无法继续。')
+  }
   return lines.join('\n')
 }
