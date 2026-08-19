@@ -13,6 +13,7 @@ COPY apps/bff/package.json ./apps/bff/
 COPY apps/web/package.json ./apps/web/
 COPY packages/scenario-compiler/package.json ./packages/scenario-compiler/
 COPY packages/mechanics/package.json ./packages/mechanics/
+COPY packages/progress/package.json ./packages/progress/
 RUN pnpm install --frozen-lockfile
 
 COPY . .
