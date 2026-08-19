@@ -8,8 +8,10 @@ import { stringify } from 'yaml'
 import { renderPersona } from './persona.ts'
 import { storySchema, type Story } from './schema.ts'
 
+export { applyRevisionsToStory, type MergeResult, type RevisionLike } from './merge.ts'
 export { renderPersona } from './persona.ts'
-export { storySchema, type Story } from './schema.ts'
+export { craftModuleNames, storySchema, type Story } from './schema.ts'
+export { compileWorkshopPreset } from './workshop.ts'
 
 export interface CompileResult {
   id: string
@@ -101,23 +103,30 @@ export function compileScenario(
 }
 
 /**
- * 把 sourceRoot 下的剧本源同步到 presetsRoot：编译现存的，清理源里已删除的。
+ * 把剧本源同步到 presetsRoot：编译现存的，清理源里已删除的。
  * 只回收 story- 前缀的目录——那是本编译器的产出，其余 preset 一律不碰。
+ *
+ * 支持多个源根，后者同 id 覆盖前者——仓库 presets/ 是内置种子，
+ * 数据卷 scenarios/ 是用户内容（工坊产出、修订落盘），数据卷优先。
  */
 export function compileAll(
-  sourceRoot: string,
+  sourceRoots: string | string[],
   presetsRoot: string,
   entries?: PluginEntries,
 ): CompileResult[] {
-  const results: CompileResult[] = []
-  if (existsSync(sourceRoot)) {
-    for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
+  const roots = Array.isArray(sourceRoots) ? sourceRoots : [sourceRoots]
+  const byId = new Map<string, CompileResult>()
+  for (const root of roots) {
+    if (!existsSync(root)) continue
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
-      const storyDir = path.join(sourceRoot, entry.name)
+      const storyDir = path.join(root, entry.name)
       if (!existsSync(path.join(storyDir, 'story.json'))) continue
-      results.push(compileScenario(storyDir, presetsRoot, entries))
+      const result = compileScenario(storyDir, presetsRoot, entries)
+      byId.set(result.id, result)
     }
   }
+  const results = [...byId.values()]
 
   if (existsSync(presetsRoot)) {
     const live = new Set(results.map(r => r.id))

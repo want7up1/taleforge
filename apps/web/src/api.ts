@@ -91,4 +91,16 @@ export const api = {
   /** 重写上一回合：fork 弃旧线重发同一输入，返回新会话 id */
   retry: (sessionId: string) =>
     json<{ sessionId: string }>(fetch(`/app/sessions/${sessionId}/retry`, { method: 'POST' })),
+
+  /** 取（或创建）常驻工坊会话 */
+  workshop: () => json<{ sessionId: string }>(fetch('/app/workshop', { method: 'POST' })),
+
+  /** 重开工坊，丢弃访谈进度 */
+  workshopReset: () => json<{ sessionId: string }>(fetch('/app/workshop/reset', { method: 'POST' })),
+
+  /** 修订落盘：把本局场外修订合并回剧本源，下一局生效 */
+  flushRevisions: (sessionId: string) =>
+    json<{ applied: number; skipped: string[] }>(
+      fetch(`/app/sessions/${sessionId}/revisions/flush`, { method: 'POST' }),
+    ),
 }

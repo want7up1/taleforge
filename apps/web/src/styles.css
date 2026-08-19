@@ -1012,3 +1012,16 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
 }
 .retry-line:hover { color: var(--amber); border-color: var(--amber); }
 .retry-line:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- 剧本工坊 ---- */
+
+.workshop-card { border-style: dashed; }
+.workshop-card h3 { color: var(--amber); }
+
+.workshop-chat { gap: 14px; }
+.ws-msg { padding-left: 12px; border-left: 2px solid var(--border); }
+.ws-msg .label { display: block; font-size: 0.72rem; color: var(--faint); letter-spacing: 0.2em; margin-bottom: 4px; }
+.ws-msg.user { border-left-color: var(--phosphor-dim); }
+.ws-msg.user p { color: var(--muted); white-space: pre-wrap; }
+.ws-msg.assistant { border-left-color: var(--amber); }
+.workshop-chat .composer { margin-top: 8px; }

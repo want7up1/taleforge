@@ -2,10 +2,17 @@
  * TaleForge 平台服务（BFF）：托管 SPA、受控转发 dsh /api、mux→SSE 桥。
  * dsh 网关无认证且只信任 loopback，本服务是唯一对外入口。
  */
-import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { compileAll } from '@taleforge/scenario-compiler'
+import {
+  applyRevisionsToStory,
+  compileAll,
+  compileScenario,
+  compileWorkshopPreset,
+  storySchema,
+  type RevisionLike,
+} from '@taleforge/scenario-compiler'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
@@ -15,16 +22,22 @@ const PORT = Number(process.env.PORT ?? 31415)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const dshHome = process.env.DSH_HOME ?? path.join(repoRoot, 'runtime/dsh-home')
 
-// 启动时把 presets/ 下的剧本源编译进 dsh 的 preset 根（幂等；preset 发现无缓存，立即可用）
+// 启动时把剧本源编译进 dsh 的 preset 根（幂等；preset 发现无缓存，立即可用）
+// 双源根：仓库 presets/ 是内置种子，数据卷 scenarios/ 是用户内容（工坊产出、修订落盘），后者同 id 覆盖
 // preset 组合文件不支持动态求值，插件路径必须在生成时写死为本机的绝对路径
-const compiled = compileAll(
-  path.join(repoRoot, 'presets'),
-  path.join(dshHome, '.agent-presets'),
-  {
-    mechanics: path.join(repoRoot, 'packages/mechanics/src/index.ts'),
-    progress: path.join(repoRoot, 'packages/progress/src/index.ts'),
-  },
-)
+const presetsRoot = path.join(dshHome, '.agent-presets')
+const scenariosRoot = path.join(dshHome, 'scenarios')
+mkdirSync(scenariosRoot, { recursive: true })
+const entries = {
+  mechanics: path.join(repoRoot, 'packages/mechanics/src/index.ts'),
+  progress: path.join(repoRoot, 'packages/progress/src/index.ts'),
+}
+const compiled = compileAll([path.join(repoRoot, 'presets'), scenariosRoot], presetsRoot, entries)
+compileWorkshopPreset(presetsRoot, {
+  workshopEntry: path.join(repoRoot, 'packages/workshop/src/index.ts'),
+  scenariosRoot,
+  entries,
+})
 const live = compiled.filter(c => !c.removed)
 const removed = compiled.filter(c => c.removed)
 console.log(`[bff] 已编译剧本 ${live.length} 个：${live.map(c => c.id).join(', ') || '（无）'}`)
@@ -200,8 +213,8 @@ interface SessionSummaryLite {
   blank: boolean
 }
 
-/** 物理删除除 keepId 外的全部会话日志。dsh 没有删除 RPC，只能动文件。 */
-function pruneSessions(keepId?: string): number {
+/** 物理删除 keep 之外的全部会话日志。dsh 没有删除 RPC，只能动文件。 */
+function pruneSessions(keep: Set<string>): number {
   const root = path.join(dshHome, 'sessions')
   if (!existsSync(root)) return 0
   let removed = 0
@@ -209,7 +222,7 @@ function pruneSessions(keepId?: string): number {
     if (!bucket.isDirectory()) continue
     const bucketDir = path.join(root, bucket.name)
     for (const entry of readdirSync(bucketDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name === keepId) continue
+      if (!entry.isDirectory() || keep.has(entry.name)) continue
       rmSync(path.join(bucketDir, entry.name), { recursive: true, force: true })
       removed++
     }
@@ -217,11 +230,26 @@ function pruneSessions(keepId?: string): number {
   return removed
 }
 
+interface SessionListItem {
+  sessionId: string
+  updatedAt: number
+  blank: boolean
+  agentPreset?: string
+}
+
+/** 工坊会话与游戏存档并存：单存档清理时要保住最近的工坊会话。 */
+async function latestWorkshopId(): Promise<string | undefined> {
+  const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
+  return items
+    .filter(s => s.agentPreset === 'workshop')
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0]?.sessionId
+}
+
 app.get('/app/sessions', asyncRoute(async (_req, res) => {
-  const { items } = await rpc<{ items: SessionSummaryLite[] }>('session.list', {})
-  // 只认最近一个真正玩过的存档，其余一律不暴露
+  const { items } = await rpc<{ items: (SessionSummaryLite & { agentPreset?: string })[] }>('session.list', {})
+  // 只认最近一个真正玩过的游戏存档；工坊会话不是存档，不在此暴露
   const live = items
-    .filter(s => !s.blank)
+    .filter(s => !s.blank && s.agentPreset !== 'workshop')
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 1)
   res.json({ items: live })
@@ -229,11 +257,71 @@ app.get('/app/sessions', asyncRoute(async (_req, res) => {
 
 app.post('/app/sessions', asyncRoute(async (req, res) => {
   const { agentPreset } = (req.body ?? {}) as { agentPreset?: string }
+  const workshop = await latestWorkshopId()
   const created = await rpc<{ sessionId: string }>('session.create', agentPreset ? { agentPreset } : {})
-  // 单存档：新局一旦建立，旧局连同调试残留一并清除
-  const removed = pruneSessions(created.sessionId)
+  // 单存档：新局一旦建立，旧局连同调试残留一并清除；工坊会话保留
+  const keep = new Set([created.sessionId, ...(workshop ? [workshop] : [])])
+  const removed = pruneSessions(keep)
   if (removed > 0) console.log(`[bff] 开新局，清除旧存档 ${removed} 个`)
   res.json(created)
+}))
+
+// ---- 工坊：对话创作剧本 ----
+
+/** 取当前工坊会话，没有就建一个。工坊常驻单会话，与游戏存档并存。 */
+app.post('/app/workshop', asyncRoute(async (_req, res) => {
+  const existing = await latestWorkshopId()
+  if (existing) {
+    res.json({ sessionId: existing })
+    return
+  }
+  const created = await rpc<{ sessionId: string }>('session.create', { agentPreset: 'workshop' })
+  res.json(created)
+}))
+
+/** 重开工坊（丢弃当前访谈进度），游戏存档不受影响。 */
+app.post('/app/workshop/reset', asyncRoute(async (_req, res) => {
+  const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
+  const game = items
+    .filter(s => !s.blank && s.agentPreset !== 'workshop')
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0]?.sessionId
+  const created = await rpc<{ sessionId: string }>('session.create', { agentPreset: 'workshop' })
+  pruneSessions(new Set([created.sessionId, ...(game ? [game] : [])]))
+  res.json(created)
+}))
+
+/**
+ * 修订落盘：把这局积累的场外修订合并回剧本源（写进数据卷 scenarios/，
+ * 成为现行正式版），并立即重编译。只对未来的新局生效，本局不受影响。
+ */
+app.post('/app/sessions/:id/revisions/flush', asyncRoute(async (req, res) => {
+  const sessionId = req.params.id
+  const history = await rpc<{ projections?: { values: { progress?: { revisions?: RevisionLike[] } | null } } }>(
+    'session.history',
+    { sessionId, maxMessages: 1 },
+  )
+  const revisions = history.projections?.values.progress?.revisions ?? []
+  if (revisions.length === 0) {
+    res.status(400).json({ error: { code: 'no-revisions', message: '本局没有可落盘的修订' } })
+    return
+  }
+  const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
+  const presetId = items.find(s => s.sessionId === sessionId)?.agentPreset
+  if (!presetId || !/^story-[a-z0-9][a-z0-9-]*$/.test(presetId)) {
+    res.status(400).json({ error: { code: 'not-a-story', message: '该会话不属于任何剧本' } })
+    return
+  }
+  // 现行正式版快照就在编译产出的 preset 里
+  const source = storySchema.parse(
+    JSON.parse(readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8')),
+  )
+  const { story: merged, applied, skipped } = applyRevisionsToStory(source, revisions)
+  const outDir = path.join(scenariosRoot, presetId.replace(/^story-/, ''))
+  mkdirSync(outDir, { recursive: true })
+  writeFileSync(path.join(outDir, 'story.json'), JSON.stringify(merged, null, 2))
+  compileScenario(outDir, presetsRoot, entries)
+  console.log(`[bff] 修订落盘：${presetId} 合并 ${applied} 条（跳过 ${skipped.length}）`)
+  res.json({ applied, skipped: skipped.map(s => s.reason) })
 }))
 
 app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
@@ -297,10 +385,13 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
   const lastUserText = textOfBlocks(flat.slice(lastStart).find(e => e.type === 'user/message')?.data.content)
   const turnEnds = flat.filter(e => e.type === 'turn/end')
 
+  const workshop = await latestWorkshopId()
+  const protect = (id: string) => new Set([id, ...(workshop ? [workshop] : [])])
+
   if (turnEnds.length >= 2 && lastUserText) {
     const anchor = turnEnds[turnEnds.length - 2].seq
     const { sessionId: child } = await rpc<{ sessionId: string }>('session.fork', { sessionId, atSeq: anchor })
-    const removed = pruneSessions(child)
+    const removed = pruneSessions(protect(child))
     console.log(`[bff] 重写回合：fork@${anchor} → ${child}，清除旧线 ${removed} 个`)
     await rpc('session.prompt', { sessionId: child, mode: 'queue', content: [{ type: 'text', text: lastUserText }] })
     res.json({ sessionId: child })
@@ -311,7 +402,7 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
   const { items } = await rpc<{ items: { sessionId: string; agentPreset?: string }[] }>('session.list', {})
   const preset = items.find(s => s.sessionId === sessionId)?.agentPreset
   const created = await rpc<{ sessionId: string }>('session.create', preset ? { agentPreset: preset } : {})
-  pruneSessions(created.sessionId)
+  pruneSessions(protect(created.sessionId))
   console.log(`[bff] 重写开场：重开新局 ${created.sessionId}`)
   res.json({ sessionId: created.sessionId })
 }))

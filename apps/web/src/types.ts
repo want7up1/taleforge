@@ -156,6 +156,7 @@ export interface ProgressRevision {
   act?: string
   op?: string
   text?: string
+  guidance?: string
 }
 
 /** progress projection 的载荷：现行幕结构（含修订）、达成、压力、终局态 */

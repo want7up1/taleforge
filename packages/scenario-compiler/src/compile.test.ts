@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { compileAll, compileScenario, renderPersona, storySchema } from './index.ts'
+import { applyRevisionsToStory, compileAll, compileScenario, compileWorkshopPreset, renderPersona, storySchema } from './index.ts'
 
 const story = {
   format: 'taleforge.story.v1',
@@ -218,4 +218,65 @@ test('显示选位与分组标题：display 三值合法、hidden 在 persona �
     ...story,
     mechanics: { resources: [{ id: 'x', label: 'x', group: 'self', min: 0, max: 1, initial: 0, maxStep: 1, guidance: 'x', display: 'popup' }] },
   }), '未知位置必须被拒绝')
+})
+
+test('双源根：后者同 id 覆盖前者（数据卷压过仓库种子），并集之外的才回收', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const repo = path.join(root, 'repo')
+    const data = path.join(root, 'data')
+    const out = path.join(root, 'out')
+    mkdirSync(path.join(repo, 'a'), { recursive: true })
+    writeFileSync(path.join(repo, 'a', 'story.json'), JSON.stringify({ ...story, tagline: '种子版' }))
+    mkdirSync(path.join(data, 'a2'), { recursive: true })
+    writeFileSync(path.join(data, 'a2', 'story.json'), JSON.stringify({ ...story, tagline: '落盘修订版' }))
+
+    compileAll([repo, data], out)
+    const compiledStory = JSON.parse(readFileSync(path.join(out, 'story-test', 'story.json'), 'utf8'))
+    assert.equal(compiledStory.tagline, '落盘修订版', '数据根应覆盖仓库同 id 剧本')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('修订落盘合并：各目标类型落对位置，产物仍过 schema', () => {
+  const source = storySchema.parse({
+    ...story,
+    cast: [{ id: 'su', name: '苏', identity: '医生' }],
+    mechanics: {
+      resources: [{ id: 'hp', label: '体力', group: 'self', min: 0, max: 100, initial: 80, maxStep: 20, guidance: '旧语义' }],
+    },
+  })
+  const { story: merged, applied, skipped } = applyRevisionsToStory(source, [
+    { target: 'world', text: '天空是红的' },
+    { target: 'direction', text: '节奏放快' },
+    { target: 'cast', id: 'su', text: '她带着一只上锁的药箱' },
+    { target: 'anchor', act: 'act-1', op: 'add', id: 'a9', text: '新锚点', signal: '新信号' },
+    { target: 'resource', id: 'hp', max: 80, guidance: '新语义' },
+    { target: 'cast', id: 'ghost', text: '不存在' },
+  ])
+  assert.equal(applied, 5)
+  assert.equal(skipped.length, 1)
+  assert.ok(merged.world.overview.endsWith('天空是红的'))
+  assert.deepEqual(merged.craft.rules, ['节奏放快'])
+  assert.ok(merged.cast[0].identity.includes('药箱'))
+  assert.ok(merged.acts[0].anchors.some(a => a.id === 'a9' && a.signal === '新信号'))
+  assert.equal(merged.mechanics?.resources?.[0].max, 80)
+  assert.equal(merged.mechanics?.resources?.[0].guidance, '新语义')
+  assert.equal(source.world.overview.includes('天空'), false, '输入不被修改')
+})
+
+test('工坊 preset 生成：persona 完整、挂发布插件、不带 story- 前缀', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    compileWorkshopPreset(root, { workshopEntry: '/abs/workshop.ts', scenariosRoot: '/data/scenarios' })
+    const yml = readFileSync(path.join(root, 'workshop', 'agent.cordis.yml'), 'utf8')
+    assert.match(yml, /dsh-persona/)
+    assert.match(yml, /publish_story/)
+    assert.match(yml, /\/abs\/workshop\.ts/)
+    assert.match(yml, /完成信号/)
+    assert.match(yml, /机械规则，不写判断规则/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

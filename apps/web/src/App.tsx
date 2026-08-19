@@ -4,9 +4,10 @@ import { History } from './History.tsx'
 import { Library } from './Library.tsx'
 import { Play } from './Play.tsx'
 import { Settings } from './Settings.tsx'
+import { Workshop } from './Workshop.tsx'
 import type { CredentialStatus, ScenarioSummary, SessionSummary, StoryDetail } from './types.ts'
 
-type View = 'library' | 'settings' | 'play' | 'history'
+type View = 'library' | 'settings' | 'play' | 'history' | 'workshop'
 
 export function App() {
   const [view, setView] = useState<View>('library')
@@ -61,6 +62,18 @@ export function App() {
     await enterSession(session.sessionId, session.agentPreset)
   }
 
+  const [workshopId, setWorkshopId] = useState<string>()
+  const enterWorkshop = async () => {
+    try {
+      setError(undefined)
+      const { sessionId } = await api.workshop()
+      setWorkshopId(sessionId)
+      setView('workshop')
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
   if (view === 'play' && active) {
     return (
       <Play
@@ -85,6 +98,21 @@ export function App() {
         sessionId={active}
         story={story}
         onBack={() => setView('play')}
+      />
+    )
+  }
+
+  if (view === 'workshop' && workshopId) {
+    return (
+      <Workshop
+        sessionId={workshopId}
+        onExit={() => {
+          setView('library')
+          void refresh()
+        }}
+        onReset={() => {
+          void api.workshopReset().then(({ sessionId }) => setWorkshopId(sessionId)).catch(err => setError(String(err)))
+        }}
       />
     )
   }
@@ -117,6 +145,7 @@ export function App() {
       onStart={id => void startScenario(id)}
       onResume={s => void resumeSession(s)}
       onSettings={() => setView('settings')}
+      onWorkshop={() => void enterWorkshop()}
     />
   )
 }

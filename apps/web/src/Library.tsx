@@ -9,6 +9,7 @@ interface Props {
   onStart: (scenarioId: string) => void
   onResume: (session: SessionSummary) => void
   onSettings: () => void
+  onWorkshop: () => void
 }
 
 export function Library({
@@ -19,6 +20,7 @@ export function Library({
   onStart,
   onResume,
   onSettings,
+  onWorkshop,
 }: Props) {
   const blocked = credential && !credential.configured
   const current = sessions[0]
@@ -86,6 +88,13 @@ export function Library({
               </article>
             ))}
             {scenarios.length === 0 && <p className="dim">暂无剧本。</p>}
+
+            {/* 工坊：对话创作新剧本，与游戏存档互不影响 */}
+            <article className="card workshop-card">
+              <h3>✎ 剧本工坊</h3>
+              <p>和工坊 agent 对话，从零创作一部新剧本——访谈、发布、立即可玩。</p>
+              <button onClick={onWorkshop} disabled={blocked}>进入工坊 ▸</button>
+            </article>
           </div>
 
           {error && <div className="error">{error}</div>}

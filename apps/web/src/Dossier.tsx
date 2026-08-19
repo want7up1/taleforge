@@ -19,9 +19,12 @@ interface Props {
   progress?: ProgressSnapshot
   focus?: string
   onClose: () => void
+  /** 修订落盘：合并回剧本源，下一局生效 */
+  onFlushRevisions?: () => void
+  flushNote?: string
 }
 
-export function Dossier({ story, stats, mechanics, attributes, inventory, progress, focus, onClose }: Props) {
+export function Dossier({ story, stats, mechanics, attributes, inventory, progress, focus, onClose, onFlushRevisions, flushNote }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -124,14 +127,18 @@ export function Dossier({ story, stats, mechanics, attributes, inventory, progre
           })}
         </section>
 
-        {progress && progress.revisions.filter(r => r.target !== 'anchor').length > 0 && (
+        {progress && progress.revisions.length > 0 && (
           <section>
             <h3>场外修订</h3>
             {progress.revisions.filter(r => r.target !== 'anchor').map((r, i) => (
               <p key={i} className="muted">
-                [{r.target === 'world' ? '世界' : r.target === 'cast' ? '人物' : '走向'}] {r.text}
+                [{{ world: '世界', cast: '人物', direction: '走向', resource: '资源', attribute: '属性' }[r.target] ?? r.target}] {r.text ?? r.guidance ?? `${r.id ?? ''} 边界调整`}
               </p>
             ))}
+            {onFlushRevisions && (
+              <button className="ghost" onClick={onFlushRevisions}>⇩ 落盘到剧本（下一局生效）</button>
+            )}
+            {flushNote && <p className="muted">{flushNote}</p>}
           </section>
         )}
 

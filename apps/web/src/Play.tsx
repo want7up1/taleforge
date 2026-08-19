@@ -311,6 +311,17 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     }
   }
 
+  const [flushNote, setFlushNote] = useState<string>()
+  const flushRevisions = async () => {
+    setFlushNote('落盘中…')
+    try {
+      const r = await api.flushRevisions(sessionId)
+      setFlushNote(`已落盘 ${r.applied} 条${r.skipped.length ? `，跳过 ${r.skipped.length} 条` : ''}——下一局从修订版开始`)
+    } catch (err) {
+      setFlushNote(String(err))
+    }
+  }
+
   const [retrying, setRetrying] = useState(false)
   const retry = async () => {
     if (retrying) return
@@ -571,6 +582,8 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           inventory={inventory}
           progress={progress}
           focus={focusCharacter}
+          onFlushRevisions={() => void flushRevisions()}
+          flushNote={flushNote}
           onClose={() => {
             setDossier(false)
             setFocusCharacter(undefined)
