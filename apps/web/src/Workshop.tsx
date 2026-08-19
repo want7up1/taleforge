@@ -22,6 +22,10 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
   const [error, setError] = useState<string>()
   const listRef = useRef<HTMLDivElement>(null)
   const opened = useRef<string | undefined>(undefined)
+  /** 断点续传：history 返回前缓冲实时分片，返回后按 seq 去重拼接 */
+  const histReady = useRef(false)
+  const chunkFloor = useRef(-1)
+  const pendingChunks = useRef<{ seq: number; text: string }[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -30,11 +34,26 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
     setRunning(false)
     setError(undefined)
 
+    histReady.current = false
+    chunkFloor.current = -1
+    pendingChunks.current = []
+
     const source = new EventSource(`/app/sessions/${sessionId}/events`)
     api.history(sessionId)
-      .then(({ events }) => {
+      .then(({ events, inflight }) => {
         if (cancelled) return
         setMessages(foldHistory(events))
+        if (inflight) {
+          chunkFloor.current = inflight.lastChunkSeq
+          const tail = pendingChunks.current
+            .filter(c => c.seq > inflight.lastChunkSeq)
+            .map(c => c.text)
+            .join('')
+          setStreaming(inflight.partial + tail)
+          setRunning(true)
+        }
+        histReady.current = true
+        pendingChunks.current = []
         // 空会话补发开场白，让工坊先自我介绍并抛出第一批选项
         const started = events.some(e => e.event.type === 'turn/start')
         if (!started && opened.current !== sessionId) {
@@ -55,7 +74,13 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
       if (event.type === 'turn/end') setRunning(false)
       if (event.type === 'assistant/chunk') {
         const chunk = event.data.chunk
-        if (chunk?.type === 'text-delta' && chunk.text) setStreaming(s => s + chunk.text)
+        if (chunk?.type === 'text-delta' && chunk.text) {
+          if (!histReady.current) {
+            pendingChunks.current.push({ seq: event.seq, text: chunk.text })
+          } else if (event.seq > chunkFloor.current) {
+            setStreaming(s => s + chunk.text)
+          }
+        }
         return
       }
       const msg = messageOfEvent(event)

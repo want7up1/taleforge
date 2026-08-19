@@ -76,6 +76,10 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const startedAt = useRef(0)
   const opened = useRef<string | undefined>(undefined)
+  /** 断点续传：history 返回前先缓冲实时分片，返回后按 seq 去重拼接 */
+  const histReady = useRef(false)
+  const chunkFloor = useRef(-1)
+  const pendingChunks = useRef<{ seq: number; text: string }[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   /** 读者是否停在底部——决定流式输出要不要跟随滚动 */
   const atBottom = useRef(true)
@@ -114,13 +118,31 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     setRunning(false)
     setFreeMode(false)
     setError(undefined)
+    histReady.current = false
+    chunkFloor.current = -1
+    pendingChunks.current = []
 
     const source = new EventSource(`/app/sessions/${sessionId}/events`)
 
     // 先连上事件流再拉历史：空存档要在这里补发开场，早于 SSE 会漏掉整段流式输出
     api.history(sessionId)
-      .then(({ events, projections }) => {
+      .then(({ events, projections, inflight }) => {
         if (cancelled) return
+        // 断点续传：回合未收尾时接上已产出的部分，再补上等待期间到达的实时分片
+        if (inflight) {
+          chunkFloor.current = inflight.lastChunkSeq
+          const tail = pendingChunks.current
+            .filter(c => c.seq > inflight.lastChunkSeq)
+            .map(c => c.text)
+            .join('')
+          const resumed = inflight.partial + tail
+          setStreaming(resumed)
+          setRunning(true)
+          startedAt.current = inflight.startedAt
+          sawText.current = resumed.length > 0
+        }
+        histReady.current = true
+        pendingChunks.current = []
         setMessages(foldHistory(events))
         // 打开存档时立刻还原数值、幕进度与最近一回合的机制事件，不必等下一回合
         if (projections?.values.mechanics) setMechanics(projections.values.mechanics)
@@ -205,7 +227,13 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
 
       if (event.type === 'assistant/chunk') {
         const chunk = event.data.chunk
-        if (chunk?.type === 'text-delta' && chunk.text) setStreaming(s => s + chunk.text)
+        if (chunk?.type === 'text-delta' && chunk.text) {
+          if (!histReady.current) {
+            pendingChunks.current.push({ seq: event.seq, text: chunk.text })
+          } else if (event.seq > chunkFloor.current) {
+            setStreaming(s => s + chunk.text)
+          }
+        }
         if (chunk?.type === 'finish') {
           const failure = (chunk as { reason?: { failure?: { message?: string } } }).reason?.failure
           if (failure?.message) setError(failure.message)

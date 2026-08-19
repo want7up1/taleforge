@@ -76,7 +76,13 @@ export const api = {
     let lastErr: unknown
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await json<{ events: HistoryEntry[]; hasMore: boolean; projections?: ProjectionsBlock }>(
+        return await json<{
+          events: HistoryEntry[]
+          hasMore: boolean
+          projections?: ProjectionsBlock
+          /** 未收尾回合的已产出部分：断点续传用 */
+          inflight?: { partial: string; lastChunkSeq: number; startedAt: number }
+        }>(
           fetch(`/app/sessions/${sessionId}/history`),
         )
       } catch (err) {

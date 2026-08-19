@@ -350,7 +350,31 @@ app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
     }
     return []
   })
-  res.json({ ...result, events })
+  // 未收尾的回合：把已产出的可见分片拼成 partial 一并下发——玩家中途离开再回来，
+  // 从断点接上继续流，不必等整回合完成
+  let inflight: { partial: string; lastChunkSeq: number; startedAt: number } | undefined
+  const lastStart = result.events.findLastIndex(e => e.event.type === 'turn/start')
+  if (lastStart >= 0 && !result.events.slice(lastStart).some(e => e.event.type === 'turn/end')) {
+    let partial = ''
+    let lastChunkSeq = -1
+    for (const { event } of result.events.slice(lastStart)) {
+      if (event.type === 'assistant/chunk') {
+        const chunk = event.data.chunk as { type?: string; text?: string } | undefined
+        if (chunk?.type === 'text-delta' && chunk.text) {
+          partial += chunk.text
+          lastChunkSeq = event.seq
+        }
+      }
+      // 回合中途已定稿的消息会进正文流，与实时行为一致：清掉已被它吸收的分片
+      if (event.type === 'assistant/message') {
+        const message = event.data.message as { content?: { type?: string; text?: string }[] } | undefined
+        if ((message?.content ?? []).some(b => b?.type === 'text' && b.text)) partial = ''
+      }
+    }
+    inflight = { partial, lastChunkSeq, startedAt: result.events[lastStart].event.time }
+  }
+
+  res.json({ ...result, events, ...(inflight ? { inflight } : {}) })
 }))
 
 app.post('/app/sessions/:id/prompt', asyncRoute(async (req, res) => {
