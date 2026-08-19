@@ -324,11 +324,33 @@ app.post('/app/sessions/:id/revisions/flush', asyncRoute(async (req, res) => {
   res.json({ applied, skipped: skipped.map(s => s.reason) })
 }))
 
+/** 前端消费的事件白名单：消息、回合边界、工具 meta。 */
+const HISTORY_KEEP = new Set(['user/message', 'turn/start', 'turn/end'])
+
 app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
   const payload: Record<string, unknown> = { sessionId: req.params.id }
   if (req.query.beforeSeq) payload.beforeSeq = Number(req.query.beforeSeq)
   if (req.query.maxMessages) payload.maxMessages = Number(req.query.maxMessages)
-  res.json(await rpc('session.history', payload))
+  const result = await rpc<{
+    events: { event: { type: string; seq: number; time: number; data: Record<string, unknown> } }[]
+    [key: string]: unknown
+  }>('session.history', payload)
+  // 原始日志 95% 是流式分片与请求快照（每回合都带整份 persona），整包下发在移动端
+  // 会直接拉挂（实测 failed to fetch 的根因）。只保留前端真正消费的部分：
+  const events = result.events.flatMap(({ event }) => {
+    if (HISTORY_KEEP.has(event.type)) return [{ event }]
+    if (event.type === 'assistant/message') {
+      // 剥掉 reasoning 块，只留玩家可见正文
+      const message = event.data.message as { content?: { type?: string }[] } | undefined
+      const content = (message?.content ?? []).filter(b => b?.type === 'text')
+      return [{ event: { ...event, data: { message: { content } } } }]
+    }
+    if (event.type === 'tool/result' && event.data?.meta) {
+      return [{ event: { type: event.type, seq: event.seq, time: event.time, data: { meta: event.data.meta } } }]
+    }
+    return []
+  })
+  res.json({ ...result, events })
 }))
 
 app.post('/app/sessions/:id/prompt', asyncRoute(async (req, res) => {

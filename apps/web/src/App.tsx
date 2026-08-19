@@ -15,6 +15,7 @@ export function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [credential, setCredential] = useState<CredentialStatus>()
   const [active, setActive] = useState<string>()
+  const [workshopId, setWorkshopId] = useState<string>()
   const [story, setStory] = useState<StoryDetail>()
   const [error, setError] = useState<string>()
 
@@ -36,6 +37,42 @@ export function App() {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // ---- hash 路由：每个界面一条浏览器历史，前进/后退可用 ----
+
+  useEffect(() => {
+    const target = `#/${view}`
+    if (location.hash !== target) location.hash = target
+  }, [view])
+
+  useEffect(() => {
+    const onHash = () => {
+      const v = location.hash.replace(/^#\//, '') as View
+      if (!['library', 'settings', 'play', 'history', 'workshop'].includes(v)) return setView('library')
+      // 需要前置状态的界面缺状态时回退剧本库
+      if ((v === 'play' || v === 'history') && !active) return setView('library')
+      if (v === 'workshop' && !workshopId) return setView('library')
+      setView(v)
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [active, workshopId])
+
+  // 刷新/深链恢复：带着 #/play 或 #/workshop 打开时直接回到对应界面
+  useEffect(() => {
+    const initial = location.hash
+    if (initial === '#/play' || initial === '#/history') {
+      void api.listSessions().then(({ items }) => {
+        const live = items.filter(s => !s.blank)[0]
+        if (live) void enterSession(live.sessionId, live.agentPreset)
+      }).catch(() => undefined)
+    } else if (initial === '#/workshop') {
+      void enterWorkshop()
+    } else if (initial === '#/settings') {
+      setView('settings')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const enterSession = useCallback(async (sessionId: string, presetId?: string) => {
     setActive(sessionId)
@@ -62,7 +99,6 @@ export function App() {
     await enterSession(session.sessionId, session.agentPreset)
   }
 
-  const [workshopId, setWorkshopId] = useState<string>()
   const enterWorkshop = async () => {
     try {
       setError(undefined)

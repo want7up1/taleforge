@@ -17,6 +17,8 @@ interface Props {
   attributes?: AttributesSnapshot
   inventory?: InventorySnapshot
   progress?: ProgressSnapshot
+  /** 防剧透：已在正文出场的人物 id 集合 */
+  knownCast?: Set<string>
   focus?: string
   onClose: () => void
   /** 修订落盘：合并回剧本源，下一局生效 */
@@ -24,7 +26,7 @@ interface Props {
   flushNote?: string
 }
 
-export function Dossier({ story, stats, mechanics, attributes, inventory, progress, focus, onClose, onFlushRevisions, flushNote }: Props) {
+export function Dossier({ story, stats, mechanics, attributes, inventory, progress, knownCast, focus, onClose, onFlushRevisions, flushNote }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -51,7 +53,7 @@ export function Dossier({ story, stats, mechanics, attributes, inventory, progre
           </section>
         )}
 
-        {mechanics && <MeterPanel snapshot={mechanics} />}
+        {mechanics && <MeterPanel snapshot={mechanics} knownCast={knownCast} />}
 
         {attributes && attributes.defs.length > 0 && (
           <section>
@@ -88,12 +90,16 @@ export function Dossier({ story, stats, mechanics, attributes, inventory, progre
 
         <section>
           <h3>你已知的人</h3>
-          {story.cast.map(c => (
+          {/* 防剧透：只列正文中真实出场过的人物 */}
+          {story.cast.filter(c => !knownCast || knownCast.has(c.id)).map(c => (
             <div key={c.id} className={`cast-row${focused?.id === c.id ? ' on' : ''}`}>
               <p className="name">{c.name}</p>
               <p className="muted">{c.identity}</p>
             </div>
           ))}
+          {knownCast && story.cast.some(c => !knownCast.has(c.id)) && (
+            <p className="dim">…还有尚未遇到的人。</p>
+          )}
         </section>
 
         <section>
@@ -109,6 +115,14 @@ export function Dossier({ story, stats, mechanics, attributes, inventory, progre
           {(progress?.acts ?? story.acts).map((act, i) => {
             const isCurrent = progress ? progress.phase === 'playing' && i === progress.actIndex : false
             const isPast = progress ? i < progress.actIndex || progress.phase === 'ended' : false
+            // 防剧透：未到的幕只露序号，标题与目标都是剧透
+            if (progress && !isCurrent && !isPast) {
+              return (
+                <div key={act.id} className="act-row">
+                  <p className="name dim">第 {i + 1} 幕：？？？</p>
+                </div>
+              )
+            }
             return (
               <div key={act.id} className={`act-row${isCurrent ? ' on' : ''}`}>
                 <p className="name">{isPast ? '✓ ' : ''}{act.title}{isCurrent ? '（当前）' : ''}</p>

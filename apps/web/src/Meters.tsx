@@ -31,9 +31,14 @@ export function placementOf(def: ResourceDef): 'strip' | 'panel' | 'hidden' {
   return def.display ?? (def.group === 'self' ? 'strip' : 'panel')
 }
 
+/** 防剧透：绑定了 revealWith 的资源，人物出场前不可见 */
+export function revealed(def: ResourceDef, knownCast?: Set<string>): boolean {
+  return !def.revealWith || !knownCast || knownCast.has(def.revealWith)
+}
+
 /** 顶栏一行：剧本选定常驻的数值，玩家每回合决策的依据 */
-export function MeterStrip({ snapshot }: { snapshot: MechanicsSnapshot }) {
-  const own = snapshot.defs.filter(d => placementOf(d) === 'strip')
+export function MeterStrip({ snapshot, knownCast }: { snapshot: MechanicsSnapshot; knownCast?: Set<string> }) {
+  const own = snapshot.defs.filter(d => placementOf(d) === 'strip' && revealed(d, knownCast))
   if (own.length === 0) return null
   return (
     <div className="meter-strip">
@@ -58,11 +63,12 @@ const GROUP_TITLE: Record<ResourceDef['group'], string> = {
   world: '世界',
 }
 
-export function MeterPanel({ snapshot }: { snapshot: MechanicsSnapshot }) {
+export function MeterPanel({ snapshot, knownCast }: { snapshot: MechanicsSnapshot; knownCast?: Set<string> }) {
   return (
     <>
       {(['self', 'affinity', 'world'] as const).map((group) => {
-        const defs = snapshot.defs.filter(d => d.group === group && placementOf(d) !== 'hidden')
+        const defs = snapshot.defs.filter(d =>
+          d.group === group && placementOf(d) !== 'hidden' && revealed(d, knownCast))
         if (defs.length === 0) return null
         return (
           <section key={group}>

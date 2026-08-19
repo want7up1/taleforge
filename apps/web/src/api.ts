@@ -71,10 +71,21 @@ export const api = {
       }),
     ),
 
-  history: (sessionId: string) =>
-    json<{ events: HistoryEntry[]; hasMore: boolean; projections?: ProjectionsBlock }>(
-      fetch(`/app/sessions/${sessionId}/history`),
-    ),
+  /** 历史拉取带重试：移动端网络切换/页面恢复时首次请求常挂 */
+  history: async (sessionId: string) => {
+    let lastErr: unknown
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await json<{ events: HistoryEntry[]; hasMore: boolean; projections?: ProjectionsBlock }>(
+          fetch(`/app/sessions/${sessionId}/history`),
+        )
+      } catch (err) {
+        lastErr = err
+        await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)))
+      }
+    }
+    throw lastErr
+  },
 
   prompt: (sessionId: string, text: string) =>
     json<{ accepted: true }>(

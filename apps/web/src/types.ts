@@ -69,6 +69,8 @@ export interface ResourceDef {
   maxStep: number
   /** 显示位置（剧本选位）；缺省：self 组进 strip，其余 panel */
   display?: 'strip' | 'panel' | 'hidden'
+  /** 防剧透门控：绑定 cast id，出场前不可见 */
+  revealWith?: string
 }
 
 export interface ResourceValue {

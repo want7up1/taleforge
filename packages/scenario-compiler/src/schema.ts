@@ -87,6 +87,11 @@ export const storySchema = z.object({
          * hidden=只记账不展示（GM 可见玩家不可见）。缺省：self 组进 strip，其余 panel。
          */
         display: z.enum(['strip', 'panel', 'hidden']).optional(),
+        /**
+         * 防剧透门控：绑定一个 cast id，该人物在正文中出场之前，这条资源
+         * （连同其结算记录）对玩家不可见。未出场人物的好感条就是剧透。
+         */
+        revealWith: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).optional(),
       })).min(1).optional(),
       /** 属性表：变动稀少的能力值，判定自动引用作修正 */
       attributes: z.array(z.object({

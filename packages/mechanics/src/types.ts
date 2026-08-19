@@ -29,6 +29,8 @@ export interface ResourceDef {
   maxStep: number
   /** 显示位置（平台枚举，剧本选位）；缺省：self 组进 strip，其余 panel */
   display?: 'strip' | 'panel' | 'hidden'
+  /** 防剧透门控：绑定 cast id，该人物出场前本条资源对玩家不可见 */
+  revealWith?: string
 }
 
 /** 侧栏分组标题自定义 */

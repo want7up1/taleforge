@@ -57,6 +57,7 @@ const mechanicsSchema = z.object({
     floor: z.number().optional(),
     maxStep: z.number(),
     display: z.enum(['strip', 'panel', 'hidden']).optional(),
+    revealWith: z.string().optional(),
   })),
   state: numericStateSchema,
   groups: z.object({

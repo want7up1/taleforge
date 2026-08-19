@@ -238,14 +238,10 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [])
 
-  // 流式输出只在读者本就停在底部时跟随，往上翻看时不打断
+  // 流式输出不跟随滚动：生成速度快于阅读速度，页面追着长文跑反而没法读
+  // （用户实测反馈）。读者自己控制进度，"还有内容"提示负责指路。
   useEffect(() => {
-    if (!streaming) return
-    if (atBottom.current) {
-      const el = scrollRef.current
-      if (el) el.scrollTop = el.scrollHeight
-    }
-    syncScrollState()
+    if (streaming) syncScrollState()
   }, [streaming, syncScrollState])
 
   // 选项、错误等落定后重新测量，决定是否提示"还有内容"
@@ -337,7 +333,24 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     }
   }
 
-  const characterNames = story?.cast.map(c => c.name) ?? []
+  // 防剧透：只有名字在正文里真实出现过的人物才算"已出场"。
+  // 中文姓名常被简称（林绾绾→绾绾），去姓后 ≥2 字的后缀也算命中。
+  const knownCast = useMemo(() => {
+    const known = new Set<string>()
+    if (!story) return known
+    const corpus = messages.filter(m => m.role === 'assistant').map(m => m.text).join('\n') + '\n' + streaming
+    for (const c of story.cast) {
+      const short = c.name.length >= 3 ? c.name.slice(1) : ''
+      if (corpus.includes(c.name) || (short.length >= 2 && corpus.includes(short))) known.add(c.id)
+    }
+    return known
+  }, [messages, streaming, story])
+
+  /** 资源可见性：hidden 选位 or 绑定人物未出场 → 不给玩家看 */
+  const defVisible = useCallback((def: { display?: string; revealWith?: string; group: string }) =>
+    placementOf(def as never) !== 'hidden' && (!def.revealWith || knownCast.has(def.revealWith)), [knownCast])
+
+  const characterNames = story?.cast.filter(c => knownCast.has(c.id)).map(c => c.name) ?? []
   const ended = progress?.phase === 'ended'
   // 场外回合的流式输出只进悬浮框，不打扰正文
   const offstreaming = offstageTurn.current || isOffstageReply(streaming)
@@ -359,7 +372,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           {turnNo > 0 && <span>第 {turnNo} 回合</span>}
           {scene && <span>{scene}</span>}
         </div>
-        {mechanics && <MeterStrip snapshot={mechanics} />}
+        {mechanics && <MeterStrip snapshot={mechanics} knownCast={knownCast} />}
         <div className="tools">
           <button onClick={() => setModelOpen(true)} title="切换本局模型">
             ▨<span className="t">{' '}{catalog?.current.model.replace('deepseek-v4-', '') ?? '…'}</span>
@@ -428,9 +441,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
             <div className="settlement">
               <span className="settlement-title">本回合结算</span>
               {settlement.filter((c) => {
-                // 剧本声明为 hidden 的数值只记账不展示（界面约定，GM 侧照常可见）
+                // hidden 选位与未出场人物的数值只记账不展示（GM 侧照常可见）
                 const def = mechanics?.defs.find(d => d.id === c.id)
-                return !(def && placementOf(def) === 'hidden')
+                return !def || defVisible(def)
               }).map((c, i) => (
                 <div key={`${c.id}-${i}`} className="settlement-row">
                   <b className={c.applied > 0 ? 'up' : 'down'}>
@@ -581,6 +594,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           attributes={attributes}
           inventory={inventory}
           progress={progress}
+          knownCast={knownCast}
           focus={focusCharacter}
           onFlushRevisions={() => void flushRevisions()}
           flushNote={flushNote}
