@@ -24,15 +24,19 @@ export function loadStory(storyDir: string): Story {
   return storySchema.parse(JSON.parse(raw))
 }
 
-/**
- * 编译单个剧本目录到 presetsRoot（幂等：整目录重建）。
- * mechanicsEntry 是机制插件的绝对路径——preset 组合文件不支持动态求值，
- * 跨机器的路径差异只能在生成时写死。
- */
+/** 平台插件入口的绝对路径——preset 组合文件不支持动态求值，跨机器差异只能在生成时写死。 */
+export interface PluginEntries {
+  /** 机制引擎（资源条等），仅剧本声明了 mechanics 时挂载 */
+  mechanics?: string
+  /** 幕进度引擎（底座能力，所有剧本都挂） */
+  progress?: string
+}
+
+/** 编译单个剧本目录到 presetsRoot（幂等：整目录重建）。 */
 export function compileScenario(
   storyDir: string,
   presetsRoot: string,
-  mechanicsEntry?: string,
+  entries?: PluginEntries,
 ): CompileResult {
   const story = loadStory(storyDir)
   const presetDir = path.join(presetsRoot, story.id)
@@ -58,10 +62,21 @@ export function compileScenario(
     },
   ]
 
-  if (story.mechanics && mechanicsEntry) {
+  if (entries?.progress) {
+    composition.push({
+      id: 'progress',
+      name: entries.progress,
+      config: {
+        acts: story.acts,
+        cast: story.cast.map(c => ({ id: c.id, name: c.name })),
+      },
+    })
+  }
+
+  if (story.mechanics && entries?.mechanics) {
     composition.push({
       id: 'mechanics',
-      name: mechanicsEntry,
+      name: entries.mechanics,
       config: { resources: story.mechanics.resources },
     })
   }
@@ -86,7 +101,7 @@ export function compileScenario(
 export function compileAll(
   sourceRoot: string,
   presetsRoot: string,
-  mechanicsEntry?: string,
+  entries?: PluginEntries,
 ): CompileResult[] {
   const results: CompileResult[] = []
   if (existsSync(sourceRoot)) {
@@ -94,7 +109,7 @@ export function compileAll(
       if (!entry.isDirectory()) continue
       const storyDir = path.join(sourceRoot, entry.name)
       if (!existsSync(path.join(storyDir, 'story.json'))) continue
-      results.push(compileScenario(storyDir, presetsRoot, mechanicsEntry))
+      results.push(compileScenario(storyDir, presetsRoot, entries))
     }
   }
 

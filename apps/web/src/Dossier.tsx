@@ -1,17 +1,18 @@
-/** 卷宗抽屉：剧本静态信息 + 会话统计。全部零成本数据，不依赖任何状态提取。 */
+/** 卷宗抽屉：剧本静态信息 + 幕进度 + 会话统计。数据全部来自投影与剧本详情。 */
 import { useEffect } from 'react'
 import { MeterPanel } from './Meters.tsx'
-import type { MechanicsSnapshot, SessionStats, StoryDetail } from './types.ts'
+import type { MechanicsSnapshot, ProgressSnapshot, SessionStats, StoryDetail } from './types.ts'
 
 interface Props {
   story: StoryDetail
   stats?: SessionStats
   mechanics?: MechanicsSnapshot
+  progress?: ProgressSnapshot
   focus?: string
   onClose: () => void
 }
 
-export function Dossier({ story, stats, mechanics, focus, onClose }: Props) {
+export function Dossier({ story, stats, mechanics, progress, focus, onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -65,14 +66,38 @@ export function Dossier({ story, stats, mechanics, focus, onClose }: Props) {
         </section>
 
         <section>
-          <h3>幕</h3>
-          {story.acts.map((act, i) => (
-            <div key={act.id} className="act-row">
-              <p className="name">{i + 1}. {act.title}</p>
-              <p className="muted">{act.objective}</p>
-            </div>
-          ))}
+          <h3>幕{progress?.phase === 'ended' ? ' · 剧终' : ''}</h3>
+          {(progress?.acts ?? story.acts).map((act, i) => {
+            const isCurrent = progress ? progress.phase === 'playing' && i === progress.actIndex : false
+            const isPast = progress ? i < progress.actIndex || progress.phase === 'ended' : false
+            return (
+              <div key={act.id} className={`act-row${isCurrent ? ' on' : ''}`}>
+                <p className="name">{isPast ? '✓ ' : ''}{act.title}{isCurrent ? '（当前）' : ''}</p>
+                <p className="muted">{act.objective}</p>
+                {isCurrent && (
+                  <ul className="anchor-list">
+                    {act.anchors.map(a => (
+                      <li key={a.id} className={progress!.achieved.includes(a.id) ? 'done' : ''}>
+                        {progress!.achieved.includes(a.id) ? '✓' : '○'} {a.text}{a.required ? '' : '（可选）'}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )
+          })}
         </section>
+
+        {progress && progress.revisions.filter(r => r.target !== 'anchor').length > 0 && (
+          <section>
+            <h3>场外修订</h3>
+            {progress.revisions.filter(r => r.target !== 'anchor').map((r, i) => (
+              <p key={i} className="muted">
+                [{r.target === 'world' ? '世界' : r.target === 'cast' ? '人物' : '走向'}] {r.text}
+              </p>
+            ))}
+          </section>
+        )}
 
         {stats && (
           <section>

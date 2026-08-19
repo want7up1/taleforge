@@ -16,6 +16,7 @@ import type {
   MechanicsSnapshot,
   ModelCatalog,
   MuxFrame,
+  ProgressSnapshot,
   SessionStats,
   StoryDetail,
 } from './types.ts'
@@ -28,6 +29,9 @@ interface Props {
 }
 
 const FREE_KEY = 'E'
+const OFFSTAGE_PREFIX = '【场外】'
+/** GM 的场外回复以（场外）开头——底座场外协议规定的固定格式 */
+const isOffstageReply = (text: string) => /^\s*[（(]场外[)）]/.test(text)
 
 export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -35,10 +39,13 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
   const [running, setRunning] = useState(false)
   const [stats, setStats] = useState<SessionStats>()
   const [mechanics, setMechanics] = useState<MechanicsSnapshot>()
+  const [progress, setProgress] = useState<ProgressSnapshot>()
   /** 本回合的结算明细，跟着正文一起显示 */
   const [settlement, setSettlement] = useState<MechanicsChange[]>([])
   const [scene, setScene] = useState<string>()
   const [freeMode, setFreeMode] = useState(false)
+  /** 场外通道：输入将以【场外】前缀发出，GM 以主持人身份回应 */
+  const [offstage, setOffstage] = useState(false)
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [elapsed, setElapsed] = useState(0)
@@ -95,8 +102,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
       .then(({ events, projections }) => {
         if (cancelled) return
         setMessages(foldHistory(events))
-        // 打开存档时立刻还原数值与最近一次结算，不必等下一回合
+        // 打开存档时立刻还原数值、幕进度与最近一次结算，不必等下一回合
         if (projections?.values.mechanics) setMechanics(projections.values.mechanics)
+        if (projections?.values.progress) setProgress(projections.values.progress)
         setSettlement(lastSettlement(events))
         resetToTopRef.current()
         // 新会话并非空日志（dsh 先写权限/沙箱等配置事件），只有 turn/start 能证明对话开过；
@@ -118,6 +126,10 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
       }
       if (frame.type === 'session/projection' && frame.key === 'mechanics') {
         setMechanics(frame.value as MechanicsSnapshot)
+        return
+      }
+      if (frame.type === 'session/projection' && frame.key === 'progress') {
+        setProgress(frame.value as ProgressSnapshot)
         return
       }
       if (frame.type !== 'session/event' || !frame.event) return
@@ -196,9 +208,19 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
     if (freeMode) textareaRef.current?.focus()
   }, [freeMode])
 
-  const latest = useMemo(() => {
-    const index = messages.findLastIndex(m => m.role === 'assistant')
-    return index >= 0 ? parseTurn(messages[index].text) : undefined
+  // 最近的正戏回合供正文与选项；若最新回复是场外答复，则单独展示、不顶掉正戏选项
+  const { latest, offstageReply } = useMemo(() => {
+    let reply: string | undefined
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role !== 'assistant') continue
+      if (isOffstageReply(m.text)) {
+        if (reply === undefined) reply = m.text
+        continue
+      }
+      return { latest: parseTurn(m.text), offstageReply: reply }
+    }
+    return { latest: undefined, offstageReply: reply }
   }, [messages])
 
   const lastPlayerAction = useMemo(() => {
@@ -219,17 +241,22 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
     setError(undefined)
     setFreeMode(false)
     setInput('')
+    const wasOffstage = offstage
+    setOffstage(false)
     try {
-      await api.prompt(sessionId, text)
+      await api.prompt(sessionId, wasOffstage ? `${OFFSTAGE_PREFIX}${text}` : text)
     } catch (err) {
       setError(String(err))
     }
   }
 
   const characterNames = story?.cast.map(c => c.name) ?? []
-  const options = !running && !streaming ? latest?.options ?? [] : []
+  const ended = progress?.phase === 'ended'
+  const idle = !running && !streaming
+  const options = idle && !ended ? latest?.options ?? [] : []
   // GM 没按格式给选项时也要留出路，否则玩家无处可点
-  const showFreeEntry = !running && !streaming && !freeMode
+  const showFreeEntry = idle && !freeMode && !ended
+  const currentAct = progress?.acts[progress.actIndex]
   const turnNo = stats?.turns ?? 0
 
   return (
@@ -238,6 +265,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
         <span className="brand">TALEFORGE</span>
         <div className="crumbs">
           <b>{story?.title ?? '游戏'}</b>
+          {currentAct && <span>{ended ? '剧终' : currentAct.title}</span>}
           {turnNo > 0 && <span>第 {turnNo} 回合</span>}
           {scene && <span>{scene}</span>}
         </div>
@@ -286,6 +314,18 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
             </div>
           )}
 
+          {/* 场外答复单独成块，不顶掉正戏与选项 */}
+          {offstageReply && !streaming && (
+            <div className="gm-block offstage-block">
+              <span className="label">GM · 场外</span>
+              <StoryMarkdown
+                text={offstageReply.replace(/^\s*[（(]场外[)）]\s*/, '')}
+                characters={characterNames}
+                onCharacter={name => setFocusCharacter(name)}
+              />
+            </div>
+          )}
+
           {!streaming && !latest && !running && (
             <p className="dim">正在开场…</p>
           )}
@@ -318,9 +358,15 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
                 </button>
               ))}
               {showFreeEntry && (
-                <button className="choice free" onClick={() => setFreeMode(true)}>
+                <button className="choice free" onClick={() => { setFreeMode(true); setOffstage(false) }}>
                   <span className="key">{FREE_KEY}</span>
                   <span className="label">其他——自己想一个行动</span>
+                </button>
+              )}
+              {showFreeEntry && (
+                <button className="choice free offstage-entry" onClick={() => { setFreeMode(true); setOffstage(true) }}>
+                  <span className="key">⌗</span>
+                  <span className="label">场外——问 GM、改设定</span>
                 </button>
               )}
             </div>
@@ -328,33 +374,54 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
 
           {options.length === 0 && showFreeEntry && (streaming || latest) && (
             <div className="choices">
-              <button className="choice free" onClick={() => setFreeMode(true)}>
+              <button className="choice free" onClick={() => { setFreeMode(true); setOffstage(false) }}>
                 <span className="key">{FREE_KEY}</span>
                 <span className="label">自由行动</span>
+              </button>
+              <button className="choice free offstage-entry" onClick={() => { setFreeMode(true); setOffstage(true) }}>
+                <span className="key">⌗</span>
+                <span className="label">场外——问 GM、改设定</span>
               </button>
             </div>
           )}
 
+          {/* 终幕：系统裁定的结局，收起一切输入 */}
+          {ended && idle && (
+            <div className="ending-card">
+              <div className="ending-mark">—— 剧终 ——</div>
+              {story && <p className="ending-title">{story.title}</p>}
+              <div className="ending-actions">
+                <button onClick={onOpenHistory}>回顾全程</button>
+                <button onClick={onExit}>返回首页</button>
+              </div>
+            </div>
+          )}
+
           {freeMode && (
-            <div className="composer">
-              <span className="prompt">&gt;</span>
+            <div className={`composer${offstage ? ' offstage' : ''}`}>
+              <span className="prompt">{offstage ? '⌗' : '>'}</span>
               <textarea
                 ref={textareaRef}
                 value={input}
                 rows={2}
-                placeholder="你要做什么？"
+                placeholder={offstage ? '场外：问 GM，或下指令——改剧情走向、人物、设定' : '你要做什么？'}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault()
                     void send(input)
                   }
-                  if (e.key === 'Escape') setFreeMode(false)
+                  if (e.key === 'Escape') {
+                    setFreeMode(false)
+                    setOffstage(false)
+                  }
                 }}
               />
               <div className="composer-actions">
-                <button className="ghost" onClick={() => setFreeMode(false)}>取消</button>
-                <button onClick={() => void send(input)} disabled={!input.trim()}>发送 ▸</button>
+                <button className="ghost" onClick={() => { setFreeMode(false); setOffstage(false) }}>取消</button>
+                <button onClick={() => void send(input)} disabled={!input.trim()}>
+                  {offstage ? '场外发送 ▸' : '发送 ▸'}
+                </button>
               </div>
             </div>
           )}
@@ -375,6 +442,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory }: Props) {
           story={story}
           stats={stats}
           mechanics={mechanics}
+          progress={progress}
           focus={focusCharacter}
           onClose={() => {
             setDossier(false)

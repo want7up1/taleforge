@@ -96,6 +96,39 @@ export interface SessionStats {
   decodeTokens: number
 }
 
+export interface ProgressAnchor {
+  id: string
+  text: string
+  required: boolean
+  signal?: string
+}
+
+export interface ProgressAct {
+  id: string
+  title: string
+  objective: string
+  anchors: ProgressAnchor[]
+}
+
+export interface ProgressRevision {
+  target: string
+  id?: string
+  act?: string
+  op?: string
+  text?: string
+}
+
+/** progress projection 的载荷：现行幕结构（含修订）、达成、压力、终局态 */
+export interface ProgressSnapshot {
+  acts: ProgressAct[]
+  actIndex: number
+  achieved: string[]
+  turn: number
+  phase: 'playing' | 'ended'
+  pressure: { level: 'low' | 'rising' | 'high'; stalledTurns: number }
+  revisions: ProgressRevision[]
+}
+
 export interface CredentialStatus {
   /** 是否已有非空值可用 */
   configured: boolean
@@ -136,6 +169,7 @@ export interface ProjectionsBlock {
   asOfSeq: number
   values: {
     mechanics?: MechanicsSnapshot | null
+    progress?: ProgressSnapshot | null
     sessionStats?: SessionStats
   }
 }

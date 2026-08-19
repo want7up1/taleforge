@@ -122,4 +122,5 @@
 - `/api` 请求/事件契约以 `node_modules/@deepseek-ai/dsh-host-apiproxy` 的 `src/api/*.ts` 为准，不凭记忆写接口。会话事件信封是 `{type, seq, time, data}`。
 - `DSH_HOME=runtime/dsh-home`（gitignored）：会话存档、凭据、编译产出的剧本 preset（`.agent-presets/<id>/`）都在里面，删除即丢档。
 - 剧本 preset 目录由平台代码直接写文件系统生成（官方 agentPreset RPC 不支持写自定义组合）；preset 发现无缓存，新目录立即可用，但已开会话锁定其创建时的那一代。
+- **改插件代码或剧本机制定义后必须重启 dsh 进程再验证**："无缓存"只覆盖 preset 目录发现；插件模块与投影注册（含闭包里的 defs）活在进程里，旧进程会用旧 defs 渲染新会话的投影——实测新会话拿到 17 条资源的组合，投影却按旧 7 条渲染。
 - 玩家剧本 preset 只挂机制工具白名单，一律不挂 bash/fs 等执行类工具（preset = shell 级权限）。

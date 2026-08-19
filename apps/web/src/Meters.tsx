@@ -50,7 +50,7 @@ export function MeterStrip({ snapshot }: { snapshot: MechanicsSnapshot }) {
 const GROUP_TITLE: Record<ResourceDef['group'], string> = {
   self: '你',
   affinity: '她们',
-  world: '据点',
+  world: '世界',
 }
 
 export function MeterPanel({ snapshot }: { snapshot: MechanicsSnapshot }) {

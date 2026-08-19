@@ -155,3 +155,46 @@ test('编译产出 preset 三件套且幂等', () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('传入插件入口时：进度引擎一律挂载，机制引擎只在声明 mechanics 时挂载', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const storyDir = path.join(root, 'src')
+    mkdirSync(storyDir)
+    writeFileSync(path.join(storyDir, 'story.json'), JSON.stringify(story))
+    const entries = { mechanics: '/abs/mechanics.ts', progress: '/abs/progress.ts' }
+
+    // 纯叙事剧本（无 mechanics 段）：只有进度引擎
+    const pure = compileScenario(storyDir, path.join(root, 'p1'), entries)
+    const pureYml = readFileSync(path.join(pure.presetDir, 'agent.cordis.yml'), 'utf8')
+    assert.match(pureYml, /\/abs\/progress\.ts/)
+    assert.match(pureYml, /act-1/, '进度引擎配置应带幕结构种子')
+    assert.doesNotMatch(pureYml, /\/abs\/mechanics\.ts/)
+
+    // 带机制的剧本：两个都挂
+    writeFileSync(path.join(storyDir, 'story.json'), JSON.stringify({
+      ...story,
+      mechanics: {
+        resources: [{
+          id: 'hp', label: '体力', group: 'self', min: 0, max: 100, initial: 80, maxStep: 20, guidance: '战斗扣，休息回',
+        }],
+      },
+    }))
+    const rich = compileScenario(storyDir, path.join(root, 'p2'), entries)
+    const richYml = readFileSync(path.join(rich.presetDir, 'agent.cordis.yml'), 'utf8')
+    assert.match(richYml, /\/abs\/progress\.ts/)
+    assert.match(richYml, /\/abs\/mechanics\.ts/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('回合固定流程紧随剧本数据、位于输出契约之前，终幕规则齐备', () => {
+  const persona = renderPersona(storySchema.parse(story))
+  const flow = persona.indexOf('# 回合固定流程')
+  const contract = persona.indexOf('# 输出格式')
+  assert.ok(flow > 0 && flow < contract, '固定流程应在输出契约之前')
+  assert.match(persona, /report_progress/)
+  assert.match(persona, /——剧终——/)
+  assert.match(persona, /revise_setting/)
+})

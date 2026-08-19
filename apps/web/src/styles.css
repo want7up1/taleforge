@@ -823,3 +823,56 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
   .column { gap: 12px; }
   .topbar { padding: 6px 12px; }
 }
+
+/* ---- F2：场外通道 ---- */
+
+.gm-block.offstage-block {
+  border-left: 3px solid var(--amber);
+  background: color-mix(in srgb, var(--panel) 88%, var(--amber) 12%);
+  border-radius: 4px;
+  padding: 0.8rem 1rem;
+  margin-top: 0.8rem;
+}
+.gm-block.offstage-block .label { color: var(--amber); }
+.gm-block.offstage-block :is(p, li) { font-family: var(--mono); font-size: 0.92rem; }
+
+.choice.offstage-entry .key { background: transparent; color: var(--amber); border: 1px dashed var(--amber); }
+.choice.offstage-entry .label { color: var(--faint); }
+
+.composer.offstage { border-color: var(--amber); }
+.composer.offstage .prompt { color: var(--amber); }
+
+/* ---- F2：终幕 ---- */
+
+.ending-card {
+  margin: 1.4rem 0;
+  padding: 1.6rem 1rem;
+  text-align: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--panel-strong);
+}
+.ending-mark {
+  font-family: var(--serif);
+  font-size: 1.3rem;
+  letter-spacing: 0.4em;
+  color: var(--phosphor);
+}
+.ending-title { margin-top: 0.5rem; color: var(--muted); }
+.ending-actions { margin-top: 1.2rem; display: flex; gap: 0.8rem; justify-content: center; }
+.ending-actions button {
+  padding: 0.5rem 1.2rem;
+  background: var(--input);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ending-actions button:hover { border-color: var(--phosphor-dim); color: var(--phosphor); }
+
+/* ---- F2：卷宗幕进度 ---- */
+
+.anchor-list { list-style: none; margin: 0.4rem 0 0; padding: 0 0 0 0.4rem; }
+.anchor-list li { color: var(--faint); font-size: 0.85rem; line-height: 1.7; }
+.anchor-list li.done { color: var(--phosphor-dim); }
+.act-row.on { border-left: 2px solid var(--phosphor-dim); padding-left: 0.6rem; }
