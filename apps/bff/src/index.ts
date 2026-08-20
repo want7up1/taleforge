@@ -2,7 +2,7 @@
  * TaleForge 平台服务（BFF）：托管 SPA、受控转发 dsh /api、mux→SSE 桥。
  * dsh 网关无认证且只信任 loopback，本服务是唯一对外入口。
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -211,6 +211,146 @@ app.post('/app/scenarios/import', (req, res) => {
 })
 
 /**
+ * 删除剧本：数据卷源 + 编译产出一并移除。仓库已无内置种子，全部剧本
+ * 都在数据根，删除语义干净。有存档正用着的剧本不许删（会话恢复依赖 preset）。
+ */
+app.delete('/app/scenarios/:id', asyncRoute(async (req, res) => {
+  const id = String(req.params.id)
+  if (!/^story-[a-z0-9][a-z0-9-]*$/.test(id)) {
+    res.status(404).json({ error: { code: 'not-found', message: '剧本不存在' } })
+    return
+  }
+  const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
+  const inUse = items.some(s => !s.blank && s.agentPreset === id && locateSession(s.sessionId) !== undefined)
+  if (inUse) {
+    res.status(409).json({ error: { code: 'in-use', message: '有存档正在使用该剧本——先删除或备份那个存档' } })
+    return
+  }
+  rmSync(path.join(scenariosRoot, id.replace(/^story-/, '')), { recursive: true, force: true })
+  rmSync(path.join(presetsRoot, id), { recursive: true, force: true })
+  console.log(`[bff] 已删除剧本 ${id}`)
+  res.json({ ok: true })
+}))
+
+// ---- 存档：删除 / 备份 / 恢复 ----
+
+const backupsRoot = path.join(dshHome, 'save-backups')
+mkdirSync(backupsRoot, { recursive: true })
+
+/** 在 sessions/<bucket>/<id> 结构里定位会话目录。 */
+function locateSession(sessionId: string): { dir: string; bucket: string } | undefined {
+  const root = path.join(dshHome, 'sessions')
+  if (!existsSync(root)) return undefined
+  for (const bucket of readdirSync(root, { withFileTypes: true })) {
+    if (!bucket.isDirectory()) continue
+    const dir = path.join(root, bucket.name, sessionId)
+    if (existsSync(dir)) return { dir, bucket: bucket.name }
+  }
+  return undefined
+}
+
+interface BackupMeta {
+  sessionId: string
+  bucket: string
+  backedAt: number
+  title?: string
+  agentPreset?: string
+  turns?: number
+}
+
+app.delete('/app/sessions/:id', asyncRoute(async (req, res) => {
+  const sessionId = String(req.params.id)
+  if ((await presetOf(sessionId).catch(() => undefined)) === 'workshop') {
+    res.status(400).json({ error: { code: 'not-a-save', message: '工坊会话不是存档' } })
+    return
+  }
+  const found = locateSession(sessionId)
+  if (!found) {
+    res.status(404).json({ error: { code: 'not-found', message: '存档不存在' } })
+    return
+  }
+  rmSync(found.dir, { recursive: true, force: true })
+  presetCache.delete(sessionId)
+  console.log(`[bff] 已删除存档 ${sessionId}`)
+  res.json({ ok: true })
+}))
+
+/** 备份存档：整目录快照进数据卷 save-backups/，容器重建不丢。 */
+app.post('/app/sessions/:id/backup', asyncRoute(async (req, res) => {
+  const sessionId = String(req.params.id)
+  const found = locateSession(sessionId)
+  if (!found) {
+    res.status(404).json({ error: { code: 'not-found', message: '存档不存在' } })
+    return
+  }
+  const { items } = await rpc<{ items: (SessionListItem & { projections?: { values?: { title?: string; sessionStats?: { turns?: number } } } })[] }>('session.list', {})
+  const summary = items.find(s => s.sessionId === sessionId)
+  const name = `${new Date().toISOString().replace(/[:.]/g, '-')}__${sessionId}`
+  const dest = path.join(backupsRoot, name)
+  cpSync(found.dir, dest, { recursive: true })
+  const meta: BackupMeta = {
+    sessionId,
+    bucket: found.bucket,
+    backedAt: Date.now(),
+    ...(summary?.projections?.values?.title ? { title: summary.projections.values.title } : {}),
+    ...(summary?.agentPreset ? { agentPreset: summary.agentPreset } : {}),
+    ...(summary?.projections?.values?.sessionStats?.turns !== undefined
+      ? { turns: summary.projections.values.sessionStats.turns }
+      : {}),
+  }
+  writeFileSync(path.join(dest, 'backup-meta.json'), JSON.stringify(meta))
+  console.log(`[bff] 已备份存档 ${sessionId} → ${name}`)
+  res.json({ name })
+}))
+
+const BACKUP_NAME = /^[0-9TZ\-]+__session-[a-z0-9-]+$/
+
+app.get('/app/save-backups', (_req, res) => {
+  const items = readdirSync(backupsRoot, { withFileTypes: true })
+    .filter(e => e.isDirectory() && BACKUP_NAME.test(e.name))
+    .map((e) => {
+      try {
+        const meta = JSON.parse(readFileSync(path.join(backupsRoot, e.name, 'backup-meta.json'), 'utf8')) as BackupMeta
+        return { name: e.name, ...meta }
+      } catch {
+        return { name: e.name, sessionId: e.name.split('__')[1] ?? '', bucket: '', backedAt: 0 }
+      }
+    })
+    .sort((a, b) => b.backedAt - a.backedAt)
+  res.json({ items })
+})
+
+/** 恢复备份：拷回原位并成为当前唯一存档（单存档语义不变，工坊会话保留）。 */
+app.post('/app/save-backups/:name/restore', asyncRoute(async (req, res) => {
+  const name = String(req.params.name)
+  const src = path.join(backupsRoot, name)
+  if (!BACKUP_NAME.test(name) || !existsSync(src)) {
+    res.status(404).json({ error: { code: 'not-found', message: '备份不存在' } })
+    return
+  }
+  const meta = JSON.parse(readFileSync(path.join(src, 'backup-meta.json'), 'utf8')) as BackupMeta
+  const target = path.join(dshHome, 'sessions', meta.bucket, meta.sessionId)
+  rmSync(target, { recursive: true, force: true })
+  mkdirSync(path.dirname(target), { recursive: true })
+  cpSync(src, target, { recursive: true })
+  rmSync(path.join(target, 'backup-meta.json'), { force: true })
+  const workshop = await latestWorkshopId().catch(() => undefined)
+  pruneSessions(new Set([meta.sessionId, ...(workshop ? [workshop] : [])]))
+  console.log(`[bff] 已恢复备份 ${name} → ${meta.sessionId}`)
+  res.json({ sessionId: meta.sessionId })
+}))
+
+app.delete('/app/save-backups/:name', (req, res) => {
+  const name = String(req.params.name)
+  if (!BACKUP_NAME.test(name)) {
+    res.status(404).json({ error: { code: 'not-found', message: '备份不存在' } })
+    return
+  }
+  rmSync(path.join(backupsRoot, name), { recursive: true, force: true })
+  res.json({ ok: true })
+})
+
+/**
  * 单个剧本的玩家可见信息。隐藏真相与人物暗线只属于 GM 提示词，
  * 这里必须剥掉——发给前端等于直接剧透。
  */
@@ -277,15 +417,16 @@ interface SessionListItem {
 async function latestWorkshopId(): Promise<string | undefined> {
   const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
   return items
-    .filter(s => s.agentPreset === 'workshop')
+    .filter(s => s.agentPreset === 'workshop' && locateSession(s.sessionId) !== undefined)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]?.sessionId
 }
 
 app.get('/app/sessions', asyncRoute(async (_req, res) => {
   const { items } = await rpc<{ items: (SessionSummaryLite & { agentPreset?: string })[] }>('session.list', {})
-  // 只认最近一个真正玩过的游戏存档；工坊会话不是存档，不在此暴露
+  // 只认最近一个真正玩过的游戏存档；工坊会话不是存档，不在此暴露。
+  // dsh 对已知会话有内存记忆，物理删除后 session.list 仍会返回——按磁盘目录实存过滤
   const live = items
-    .filter(s => !s.blank && s.agentPreset !== 'workshop')
+    .filter(s => !s.blank && s.agentPreset !== 'workshop' && locateSession(s.sessionId) !== undefined)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 1)
   res.json({ items: live })

@@ -36,6 +36,13 @@ export interface StoryDetail {
   cast: { id: string; name: string; identity: string }[]
   opening: { scene: string; hook: string }
   acts: StoryAct[]
+  craft?: { modules: string[]; rating?: string; rules?: string[] }
+  mechanics?: {
+    resources?: unknown[]
+    attributes?: unknown[]
+    checks?: { die?: string }
+    inventory?: { initial?: unknown[] }
+  }
 }
 
 export interface ModelSelection {

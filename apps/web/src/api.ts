@@ -121,6 +121,30 @@ export const api = {
       fetch(`/app/sessions/${sessionId}/revisions/flush`, { method: 'POST' }),
     ),
 
+  /** 删除剧本（数据源+编译产出）；有存档在用会被 409 拒绝 */
+  deleteScenario: (id: string) =>
+    json<{ ok: true }>(fetch(`/app/scenarios/${id}`, { method: 'DELETE' })),
+
+  /** 删除存档 */
+  deleteSession: (sessionId: string) =>
+    json<{ ok: true }>(fetch(`/app/sessions/${sessionId}`, { method: 'DELETE' })),
+
+  /** 备份存档（服务器快照，随数据卷持久化） */
+  backupSession: (sessionId: string) =>
+    json<{ name: string }>(fetch(`/app/sessions/${sessionId}/backup`, { method: 'POST' })),
+
+  listBackups: () =>
+    json<{ items: { name: string; sessionId: string; backedAt: number; title?: string; agentPreset?: string; turns?: number }[] }>(
+      fetch('/app/save-backups'),
+    ),
+
+  /** 恢复备份：成为当前唯一存档 */
+  restoreBackup: (name: string) =>
+    json<{ sessionId: string }>(fetch(`/app/save-backups/${name}/restore`, { method: 'POST' })),
+
+  deleteBackup: (name: string) =>
+    json<{ ok: true }>(fetch(`/app/save-backups/${name}`, { method: 'DELETE' })),
+
   /** 导入剧本：校验失败返回逐条错误（400 也要解析正文，不走通用 json 助手） */
   importStory: async (story: unknown) => {
     const res = await fetch('/app/scenarios/import', {

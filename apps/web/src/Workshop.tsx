@@ -21,6 +21,8 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
   const [running, setRunning] = useState(false)
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
+  const [importNote, setImportNote] = useState<string>()
+  const fileRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const opened = useRef<string | undefined>(undefined)
   /** 断点续传：history 返回前缓冲实时分片，返回后按 seq 去重拼接 */
@@ -113,6 +115,20 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
     }
   }, [input, running, sessionId])
 
+  const importFile = async (file: File) => {
+    setImportNote('导入中…')
+    try {
+      const story = JSON.parse(await file.text()) as unknown
+      const result = await api.importStory(story)
+      setImportNote(result.ok
+        ? `《${result.title}》已导入并上架`
+        : `校验失败 ${result.issues?.length ?? 0} 处：\n`
+          + (result.issues ?? []).map(i => `· ${i.path}：${i.message}`).join('\n'))
+    } catch (err) {
+      setImportNote(`导入失败：${String(err)}`)
+    }
+  }
+
   return (
     <div className="screen">
       <header className="topbar">
@@ -136,6 +152,24 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
 
       <div className="scroll" ref={listRef}>
         <div className="column workshop-chat">
+          {/* 创作包：说明书在顶栏；此处导入外部写好的 story.json */}
+          <div className="workshop-kit">
+            <span className="muted">创作包：照「⤓ 说明书」自己写（或让别的 AI 写）一份 story.json，导入即校验上架；同 id 覆盖更新。</span>
+            <button className="ghost" onClick={() => fileRef.current?.click()}>导入剧本 ⤒</button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) void importFile(file)
+                e.target.value = ''
+              }}
+            />
+          </div>
+          {importNote && <p className="muted import-note">{importNote}</p>}
+
           {messages.map((m, i) => (
             <div key={m.seq ?? i} className={`ws-msg ${m.role}`}>
               <span className="label">{m.role === 'user' ? '你' : '工坊'}</span>

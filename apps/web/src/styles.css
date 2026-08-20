@@ -1078,3 +1078,62 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
   .brand-text { display: none; }
   .brand-logo { width: 24px; height: 24px; }
 }
+
+/* ---- 游戏列表重构：可点卡片 / 存档操作 / 详情页 ---- */
+
+.card-clickable { cursor: pointer; transition: border-color 0.15s; }
+.card-clickable:hover { border-color: var(--phosphor-dim); }
+.card-enter { font-size: 0.8rem; color: var(--faint); }
+.card-clickable:hover .card-enter { color: var(--phosphor); }
+
+.save-row-wrap { display: flex; gap: 10px; align-items: stretch; }
+.save-row-wrap .save-row { flex: 1; min-width: 0; }
+.save-row.static { cursor: default; display: flex; flex-direction: column; justify-content: center; }
+.save-actions { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.save-actions .ghost {
+  font-size: 0.78rem;
+  padding: 5px 10px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  color: var(--faint);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.save-actions .ghost:hover { color: var(--amber); border-color: var(--amber); }
+.ghost.danger:hover { color: var(--danger) !important; border-color: var(--danger) !important; }
+
+.detail { gap: 18px; }
+.detail-title { font-family: var(--serif); font-size: 1.5rem; }
+.detail-tagline { color: var(--muted); margin-top: 4px; }
+.detail-rating { margin-top: 8px; font-size: 0.85rem; }
+.tag-craft { border-color: var(--amber); color: var(--amber); }
+.detail-actions { padding: 4px 0; }
+.detail-actions .danger { color: var(--faint); }
+.detail-overview { white-space: pre-wrap; line-height: 1.9; }
+.detail-cast { margin-bottom: 6px; line-height: 1.7; }
+
+.workshop-kit {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  font-size: 0.82rem;
+}
+.workshop-kit .ghost {
+  background: none;
+  border: 1px dashed var(--amber);
+  border-radius: 3px;
+  color: var(--amber);
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .save-row-wrap { flex-direction: column; }
+  .save-actions { flex-direction: row; }
+}

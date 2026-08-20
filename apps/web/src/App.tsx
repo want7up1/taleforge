@@ -4,11 +4,12 @@ import { Brand } from './Brand.tsx'
 import { History } from './History.tsx'
 import { Library } from './Library.tsx'
 import { Play } from './Play.tsx'
+import { ScenarioDetail } from './ScenarioDetail.tsx'
 import { Settings } from './Settings.tsx'
 import { Workshop } from './Workshop.tsx'
 import type { CredentialStatus, ScenarioSummary, SessionSummary, StoryDetail } from './types.ts'
 
-type View = 'library' | 'settings' | 'play' | 'history' | 'workshop'
+type View = 'library' | 'settings' | 'play' | 'history' | 'workshop' | 'scenario'
 
 export function App() {
   const [view, setView] = useState<View>('library')
@@ -18,6 +19,8 @@ export function App() {
   const [active, setActive] = useState<string>()
   const [workshopId, setWorkshopId] = useState<string>()
   const [story, setStory] = useState<StoryDetail>()
+  /** 详情页正在查看的剧本 */
+  const [detail, setDetail] = useState<StoryDetail>()
   const [error, setError] = useState<string>()
 
   const refresh = useCallback(async () => {
@@ -42,12 +45,21 @@ export function App() {
   // ---- hash 路由：每个界面一条浏览器历史，前进/后退可用 ----
 
   useEffect(() => {
-    const target = `#/${view}`
+    const target = view === 'scenario' && detail ? `#/scenario/${detail.id}` : `#/${view}`
     if (location.hash !== target) location.hash = target
-  }, [view])
+  }, [view, detail])
 
   useEffect(() => {
     const onHash = () => {
+      if (location.hash.startsWith('#/scenario/')) {
+        const id = location.hash.slice('#/scenario/'.length)
+        if (detail?.id === id) return setView('scenario')
+        api.scenario(id).then((s) => {
+          setDetail(s)
+          setView('scenario')
+        }).catch(() => setView('library'))
+        return
+      }
       const v = location.hash.replace(/^#\//, '') as View
       if (!['library', 'settings', 'play', 'history', 'workshop'].includes(v)) return setView('library')
       // 需要前置状态的界面缺状态时回退剧本库
@@ -57,9 +69,9 @@ export function App() {
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
-  }, [active, workshopId])
+  }, [active, workshopId, detail])
 
-  // 刷新/深链恢复：带着 #/play 或 #/workshop 打开时直接回到对应界面
+  // 刷新/深链恢复：带着 #/play、#/workshop、#/scenario/<id> 打开时直接回到对应界面
   useEffect(() => {
     const initial = location.hash
     if (initial === '#/play' || initial === '#/history') {
@@ -71,9 +83,25 @@ export function App() {
       void enterWorkshop()
     } else if (initial === '#/settings') {
       setView('settings')
+    } else if (initial.startsWith('#/scenario/')) {
+      const id = initial.slice('#/scenario/'.length)
+      void api.scenario(id).then((s) => {
+        setDetail(s)
+        setView('scenario')
+      }).catch(() => undefined)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const openScenario = async (id: string) => {
+    try {
+      setError(undefined)
+      setDetail(await api.scenario(id))
+      setView('scenario')
+    } catch (err) {
+      setError(String(err))
+    }
+  }
 
   const enterSession = useCallback(async (sessionId: string, presetId?: string) => {
     setActive(sessionId)
@@ -154,6 +182,24 @@ export function App() {
     )
   }
 
+  if (view === 'scenario' && detail) {
+    return (
+      <ScenarioDetail
+        story={detail}
+        hasSave={sessions.length > 0}
+        blocked={credential && !credential.configured}
+        onStart={() => void startScenario(detail.id)}
+        onDeleted={() => {
+          setDetail(undefined)
+          setView('library')
+          void refresh()
+        }}
+        onBack={() => setView('library')}
+        onWorkshop={() => void enterWorkshop()}
+      />
+    )
+  }
+
   if (view === 'settings') {
     return (
       <div className="screen">
@@ -179,7 +225,7 @@ export function App() {
       sessions={sessions}
       credential={credential}
       error={error}
-      onStart={id => void startScenario(id)}
+      onOpenScenario={id => void openScenario(id)}
       onResume={s => void resumeSession(s)}
       onSettings={() => setView('settings')}
       onWorkshop={() => void enterWorkshop()}
