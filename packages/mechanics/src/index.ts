@@ -210,9 +210,10 @@ export function apply(ctx: Context, config: Config) {
   if (inventory) {
     ctx.tools.register(defineTool({
       name: 'adjust_inventory',
-      description: '记录物品变动。正文里写到获得、交出、消耗、损毁某件物品的回合，必须同步入账。'
+      description: '记录物品变动。正文里写到获得、交出、消耗、损毁某件物品的回合，必须当回合同步入账，不许隔回合补记。'
         + 'op：add（获得，新物品必须给 name）/ remove（失去）/ set（改数量或备注，只改既有物品）。'
-        + '一切引用走物品 id（kebab-case），不要凭名字模糊匹配。',
+        + '一切引用走物品 id（kebab-case），不要凭名字模糊匹配。'
+        + '成批入账按种类分条、各给数量（如 bottled-water×6、canned-food×4），不许打包成一条「物资」——打包的账没法逐件消耗。',
       parameters: {
         changes: {
           type: 'array',

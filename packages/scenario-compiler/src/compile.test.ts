@@ -66,6 +66,20 @@ test('craft.reminder：合法可选、超 600 字拒绝（贴身的前提是短�
   assert.throws(() => storySchema.parse({ ...story, craft: { modules: [], rules: [], reminder: '长'.repeat(601) } }))
 })
 
+test('acts[].reminder：分幕贴身提醒合法可选、同样限 600 字', () => {
+  const withStage = {
+    ...story,
+    acts: [{ ...story.acts[0], reminder: '本幕世界还是正常的：写日常温度，不写底噪。' }],
+  }
+  const ok = storySchema.parse(withStage)
+  assert.equal(ok.acts[0].reminder, '本幕世界还是正常的：写日常温度，不写底噪。')
+  assert.equal(storySchema.parse(story).acts[0].reminder, undefined)
+  assert.throws(() => storySchema.parse({
+    ...story,
+    acts: [{ ...story.acts[0], reminder: '长'.repeat(601) }],
+  }))
+})
+
 test('工艺模块可组合，按声明顺序拼接', () => {
   const persona = renderPersona(
     storySchema.parse({ ...story, craft: { modules: ['shuang', 'harem'], rules: [] } }),

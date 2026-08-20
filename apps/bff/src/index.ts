@@ -13,7 +13,7 @@ import {
   storySchema,
   type RevisionLike,
 } from '@taleforge/scenario-compiler'
-import { publishStory } from '@taleforge/workshop'
+import { listVersions, publishStory, versionsDirOf } from '@taleforge/workshop'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
@@ -204,9 +204,39 @@ app.get('/app/scenarios/:id/export', (req, res) => {
   res.send(readFileSync(storyPath, 'utf8'))
 })
 
-/** 导入剧本：校验（错误逐条返回）→ 写数据卷 → 立即编译上架。同 id 覆盖更新。 */
+/**
+ * 导入剧本：校验（错误逐条返回）→ 写数据卷 → 立即编译上架。同 id 覆盖更新。
+ * 手动导入是作者本人的深思熟虑，不走缩水防线（那道防线拦的是 GM 复述丢内容）；
+ * 旧版留档照常发生。
+ */
 app.post('/app/scenarios/import', (req, res) => {
-  const result = publishStory({ scenariosRoot, presetsRoot, entries }, req.body)
+  const result = publishStory({ scenariosRoot, presetsRoot, entries }, req.body, { force: true })
+  res.status(result.ok ? 200 : 400).json(result)
+})
+
+// ---- 剧本历史版本：覆盖发布自动留档（最近 10 版），可回滚 ----
+
+app.get('/app/scenarios/:id/versions', (req, res) => {
+  res.json({ versions: listVersions({ scenariosRoot, presetsRoot, entries }, String(req.params.id)) })
+})
+
+app.post('/app/scenarios/:id/versions/:name/restore', (req, res) => {
+  const id = String(req.params.id)
+  const name = String(req.params.name)
+  const file = path.join(versionsDirOf({ scenariosRoot, presetsRoot, entries }, id), name)
+  if (!/^v-\d+\.json$/.test(name) || !existsSync(file)) {
+    res.status(404).json({ error: { code: 'not-found', message: '没有这个历史版本' } })
+    return
+  }
+  let story: unknown
+  try {
+    story = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    res.status(500).json({ error: { code: 'corrupt-version', message: '历史版本文件损坏，无法回滚' } })
+    return
+  }
+  // 回滚也是一次覆盖发布：当前版先自动留档，所以回滚本身也可再回滚
+  const result = publishStory({ scenariosRoot, presetsRoot, entries }, story, { force: true })
   res.status(result.ok ? 200 : 400).json(result)
 })
 
@@ -649,7 +679,7 @@ app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
  * 追加为玩家消息的第二个文本块，回合开头就贴在生成点旁，不再依赖工具被调用。
  * 前端按【回合流程】前缀隐藏此块；场外消息与工坊会话不注入。
  */
-const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress（无进展传空数组）；有机制面板则接着用相应工具结算本回合变化；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
+const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress——每一回合都要调，无进展传空数组（转幕判定与逐回合结算都靠它）；有机制面板则接着用相应工具把本回合的全部变化结清；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
 
 const presetCache = new Map<string, string | undefined>()
 async function presetOf(sessionId: string): Promise<string | undefined> {
@@ -660,31 +690,99 @@ async function presetOf(sessionId: string): Promise<string | undefined> {
 }
 
 /**
- * 剧本贴身提醒（craft.reminder）：长局里正文先例的权重会压过 persona 深处的
- * 声明（实测 30+ 回合后 rating 直接失效——推理里复述得出来，落笔跟着旧文风走），
- * 把剧本自己声明的短提醒拼进回合头注入块，贴住生成点。每回合现读现取：
- * 修改剧本重新发布后，进行中的局下一回合就吃到新文本，不受会话锁定影响。
+ * 剧本贴身提醒（craft.reminder / acts[].reminder）：长局里正文先例的权重会压过
+ * persona 深处的声明（实测 30+ 回合后 rating 直接失效——推理里复述得出来，落笔
+ * 跟着旧文风走），把剧本自己声明的短提醒拼进回合头注入块，贴住生成点。
+ * 分幕提醒按会话当前幕现挑现注：只注当前幕那段，未到的幕天然防剧透；没写的幕
+ * 回落到 craft.reminder。每回合现读现取：修改剧本重新发布后，进行中的局下一
+ * 回合就吃到新文本，不受会话锁定影响。
  */
-function reminderOf(presetId: string): string | undefined {
+function reminderOf(presetId: string, actIndex: number | undefined): string | undefined {
   try {
     const story = JSON.parse(
       readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8'),
-    ) as { craft?: { reminder?: string } }
-    const text = story.craft?.reminder?.trim()
+    ) as { craft?: { reminder?: string }; acts?: { reminder?: string }[] }
+    const staged = actIndex !== undefined ? story.acts?.[actIndex]?.reminder?.trim() : undefined
+    const text = staged || story.craft?.reminder?.trim()
     return text || undefined
   } catch {
     return undefined
   }
 }
 
-/** 正戏回合头注入块：平台固定流程 + 剧本贴身提醒。非剧本会话返回 undefined。 */
+interface NumericSnapshot {
+  defs: { id: string; label: string; group?: 'affinity' | 'self' | 'world' }[]
+  state: Record<string, { value: number }>
+  groups?: { self?: string; affinity?: string; world?: string }
+}
+interface ProjectionValues {
+  mechanics?: NumericSnapshot | null
+  attributes?: NumericSnapshot | null
+  inventory?: { items: { name: string; qty: number }[] } | null
+  progress?: { actIndex: number } | null
+}
+
+/**
+ * 面板即时快照，随回合头注入（治"GM 忘了物品栏里有什么"与延迟结算）：
+ * 机制状态折叠在会话事件里，长局中初始清单早被上下文稀释——GM 会在正文里
+ * 发明装备（实测：物品栏躺着钢管，正文抡了五回合不存在的折叠椅）。每回合把
+ * 全量数值与物品清单贴到生成点旁，账实相符就有了对照物。hidden 资源一并给
+ * GM（本块玩家侧被前端隐藏，与 hidden 的界面约定一致）。
+ */
+function panelLines(values: ProjectionValues): string[] {
+  const lines: string[] = []
+  const numeric = (snap: NumericSnapshot | null | undefined): Map<string, string[]> => {
+    const byGroup = new Map<string, string[]>()
+    for (const def of snap?.defs ?? []) {
+      const value = snap?.state[def.id]?.value
+      if (value === undefined) continue
+      const group = def.group ?? ''
+      if (!byGroup.has(group)) byGroup.set(group, [])
+      byGroup.get(group)!.push(`${def.label}${value}`)
+    }
+    return byGroup
+  }
+  const attrs = [...numeric(values.attributes).values()].flat()
+  if (attrs.length) lines.push(`属性：${attrs.join(' ')}`)
+  const groupTitle = { self: '自身', affinity: '好感', world: '队伍' } as const
+  for (const [group, parts] of numeric(values.mechanics)) {
+    const title = values.mechanics?.groups?.[group as keyof typeof groupTitle]
+      ?? groupTitle[group as keyof typeof groupTitle] ?? group
+    lines.push(`${title}：${parts.join(' ')}`)
+  }
+  const items = values.inventory?.items ?? []
+  if (items.length) {
+    lines.push(`物品栏：${items.map(i => (i.qty > 1 ? `${i.name}×${i.qty}` : i.name)).join('、')}`)
+  }
+  return lines
+}
+
+/** 正戏回合头注入块：平台固定流程 + 面板快照 + 剧本贴身提醒。非剧本会话返回 undefined。 */
 async function turnHeadBlock(sessionId: string): Promise<{ type: string; text: string } | undefined> {
   const preset = await presetOf(sessionId).catch(() => undefined)
   if (!preset?.startsWith('story-')) return undefined
-  const reminder = reminderOf(preset)
+  let panel = ''
+  let actIndex: number | undefined
+  try {
+    const history = await rpc<{ projections?: { values: ProjectionValues } }>(
+      'session.history',
+      { sessionId, maxMessages: 1 },
+    )
+    const values = history.projections?.values ?? {}
+    actIndex = values.progress?.actIndex
+    const lines = panelLines(values)
+    if (lines.length) {
+      panel = `\n【当前面板】${lines.join('；')}。`
+        + '面板是即时真值：正文中的装备物品必须与物品栏一致（新到手先入账再用）；'
+        + '本回合的一切增减当回合结算，含每回合底噪，不许延后补账。'
+    }
+  } catch {
+    // 快照拿不到就只注流程与提醒——注入永远不能挡住回合本身
+  }
+  const reminder = reminderOf(preset, actIndex)
   return {
     type: 'text',
-    text: `\n\n${TURN_FLOW_REMINDER}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
+    text: `\n\n${TURN_FLOW_REMINDER}${panel}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
   }
 }
 

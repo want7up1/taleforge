@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { listStories, publishStory, readStory } from './index.ts'
+import { listStories, listVersions, publishStory, readStory } from './index.ts'
 
 const story = {
   format: 'taleforge.story.v1',
@@ -45,6 +45,49 @@ test('发布非法剧本：逐条错误退回、不落盘任何文件', () => {
     assert.match(result.brief, /校验失败/)
     assert.ok(!existsSync(config.scenariosRoot), '校验失败不得写任何文件')
     assert.ok(!('id' in result) && !('title' in result), '失败时不携带 id/title 键（无损 JSON）')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('覆盖发布防护：旧版自动留档可列出；缩水默认拦下、force 放行', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tf-ws-'))
+  try {
+    const config = { scenariosRoot: path.join(root, 'scenarios'), presetsRoot: path.join(root, 'presets') }
+    assert.equal(publishStory(config, story).ok, true)
+    assert.equal(listVersions(config, 'story-ws-test').length, 0, '首次发布无旧版可留')
+
+    // 同体量的覆盖更新：通过，且留档一版
+    const updated = { ...story, tagline: '换一句话卖点' }
+    assert.equal(publishStory(config, updated).ok, true)
+    const versions = listVersions(config, 'story-ws-test')
+    assert.equal(versions.length, 1)
+    const kept = JSON.parse(
+      readFileSync(path.join(config.scenariosRoot, 'ws-test/versions', versions[0].name), 'utf8'),
+    ) as { tagline: string }
+    assert.equal(kept.tagline, '一句话', '留档的是覆盖前的旧正式版')
+
+    const fewerAnchors = {
+      ...updated,
+      acts: [{ ...updated.acts[0], anchors: updated.acts[0].anchors.slice(0, 1) }],
+      craft: { modules: ['standard'], rules: [] },
+    }
+    // 先发布一个双锚点版本，再用单锚点覆盖以触发缩水防线
+    const twoAnchors = {
+      ...updated,
+      acts: [{ ...updated.acts[0], anchors: [...updated.acts[0].anchors, { id: 'y', text: '第二锚点', signal: '信号' }] }],
+    }
+    assert.equal(publishStory(config, twoAnchors).ok, true)
+    const blocked = publishStory(config, fewerAnchors)
+    assert.equal(blocked.ok, false)
+    assert.match(blocked.brief, /缩水防线/)
+    const current = readStory(config.presetsRoot, 'story-ws-test') as { acts: { anchors: unknown[] }[] }
+    assert.equal(current.acts[0].anchors.length, 2, '被拦下的发布不得写入')
+
+    // 确认过的删减：force 放行
+    const forced = publishStory(config, fewerAnchors, { force: true })
+    assert.equal(forced.ok, true)
+    assert.ok(listVersions(config, 'story-ws-test').length >= 2, '放行的覆盖同样留档')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

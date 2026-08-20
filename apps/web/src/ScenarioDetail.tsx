@@ -51,6 +51,7 @@ export function ScenarioDetail({
   onBack,
 }: Props) {
   const [saves, setSaves] = useState<SaveItem[]>([])
+  const [versions, setVersions] = useState<{ name: string; savedAt: number; chars: number }[]>([])
   const [note, setNote] = useState<string>()
   /** 本剧本自己的进行中会话（current 可能属于别的剧本，那种只用于覆盖确认） */
   const mine = current?.agentPreset === story.id ? current : undefined
@@ -58,6 +59,9 @@ export function ScenarioDetail({
   const loadSaves = useCallback(() => {
     api.listSaves()
       .then(r => setSaves(r.items.filter(s => s.agentPreset === story.id)))
+      .catch(() => undefined)
+    api.listVersions(story.id)
+      .then(r => setVersions(r.versions))
       .catch(() => undefined)
   }, [story.id])
 
@@ -115,6 +119,19 @@ export function ScenarioDetail({
     if (!confirm('删除这份存档？')) return
     try {
       await api.deleteSave(name)
+      loadSaves()
+    } catch (err) {
+      setNote(String(err))
+    }
+  }
+
+  const rollback = async (name: string) => {
+    if (!confirm('回滚到这个历史版本？当前版会先自动留档，回滚后还能滚回来。进行中的局仅贴身提醒等热字段随之变化，其余下一局生效。')) return
+    setNote('回滚中…')
+    try {
+      const r = await api.restoreVersion(story.id, name)
+      setNote(r.brief)
+      onRefresh()
       loadSaves()
     } catch (err) {
       setNote(String(err))
@@ -203,6 +220,25 @@ export function ScenarioDetail({
                     <div className="save-actions">
                       <button className="ghost" onClick={() => void load(s.name)}>↻ 读档</button>
                       <button className="ghost danger" onClick={() => void removeSave(s.name)}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {versions.length > 0 && (
+            <section>
+              <h3 className="section-title">剧本历史版本</h3>
+              <div className="saves">
+                {versions.map(v => (
+                  <div key={v.name} className="save-row-wrap">
+                    <div className="save-row static">
+                      <span className="save-title">{new Date(v.savedAt).toLocaleString()}</span>
+                      <span className="save-meta">{Math.round(v.chars / 1000)}k 字符 · 覆盖发布前的自动留档</span>
+                    </div>
+                    <div className="save-actions">
+                      <button className="ghost" onClick={() => void rollback(v.name)}>↩ 回滚</button>
                     </div>
                   </div>
                 ))}

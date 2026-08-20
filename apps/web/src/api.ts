@@ -133,6 +133,18 @@ export const api = {
   deleteScenario: (id: string) =>
     json<{ ok: true }>(fetch(`/app/scenarios/${id}`, { method: 'DELETE' })),
 
+  /** 剧本历史版本（覆盖发布自动留档，最近 10 版） */
+  listVersions: (id: string) =>
+    json<{ versions: { name: string; savedAt: number; chars: number }[] }>(
+      fetch(`/app/scenarios/${id}/versions`),
+    ),
+
+  /** 回滚到某个历史版本（当前版会先自动留档，回滚可再回滚） */
+  restoreVersion: (id: string, name: string) =>
+    json<{ ok: boolean; brief: string }>(
+      fetch(`/app/scenarios/${id}/versions/${name}/restore`, { method: 'POST' }),
+    ),
+
   /** 删除进行中的会话 */
   deleteSession: (sessionId: string) =>
     json<{ ok: true }>(fetch(`/app/sessions/${sessionId}`, { method: 'DELETE' })),

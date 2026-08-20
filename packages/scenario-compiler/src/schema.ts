@@ -24,6 +24,12 @@ export const actSchema = z.object({
   objective: z.string().min(1),
   anchors: z.array(anchorSchema).min(1),
   forbidden_reveals: z.array(z.string()).default([]),
+  /**
+   * 分幕贴身提醒（可选，≤600 字）：本幕进行期间替换 craft.reminder 随回合头注入。
+   * 用于世界状态/文风随剧情阶段变化的剧本——每幕只注入当前幕的那段，未到的幕玩家
+   * 与 GM 生成点都看不到（天然防剧透）。没写的幕回落到 craft.reminder。
+   */
+  reminder: z.string().min(1).max(600).optional(),
 })
 
 /** 平台工艺货架上的模块名。上新货在 persona.ts 的 CRAFT_MODULES 里加，同时更新此枚举。 */

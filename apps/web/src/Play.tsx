@@ -37,6 +37,15 @@ interface Props {
 }
 
 const FREE_KEY = 'E'
+/** 工具轮的可见化文案：正文开流前玩家看到 GM 正在做什么 */
+const TOOL_PHASE: Record<string, string> = {
+  report_progress: '核对剧情进度',
+  adjust_resources: '结算数值',
+  adjust_attributes: '结算属性',
+  adjust_inventory: '清点物品',
+  roll_check: '掷骰判定',
+  revise_setting: '修订设定',
+}
 const OFFSTAGE_PREFIX = '【场外】'
 /** GM 的场外回复以（场外）开头——底座场外协议规定的固定格式 */
 const isOffstageReply = (text: string) => /^\s*[（(]场外[)）]/.test(text)
@@ -48,6 +57,8 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
   const [running, setRunning] = useState(false)
+  // 回合阶段：正文开流之前模型在干什么（构思/结算……）——长等待要让玩家看得见原因
+  const [phase, setPhase] = useState<string>()
   const [stats, setStats] = useState<SessionStats>()
   const [mechanics, setMechanics] = useState<MechanicsSnapshot>()
   const [attributes, setAttributes] = useState<AttributesSnapshot>()
@@ -191,6 +202,13 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
       if (frame.type !== 'session/event' || !frame.event) return
       const event = frame.event
 
+      // 结算阶段可见化：等待的大头是推理与工具轮，报出正在做什么
+      if (event.type === 'tool/call') {
+        const name = (event.data as { name?: string }).name
+        if (name) setPhase(TOOL_PHASE[name] ?? '结算面板')
+        return
+      }
+
       // 机制事件从 tool/result 的 meta 取，与正文同回合展示（turn/start 时清零）
       if (event.type === 'tool/result') {
         const meta = (event.data as { meta?: { kind?: string; changes?: unknown[] } }).meta
@@ -209,6 +227,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
         startedAt.current = Date.now()
         setElapsed(0)
         setRunning(true)
+        setPhase('构思中')
         setStreaming('')
         setSettlement([])
         setInvChanges([])
@@ -228,7 +247,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
 
       if (event.type === 'assistant/chunk') {
         const chunk = event.data.chunk
+        if (chunk?.type === 'reasoning-delta' || chunk?.type === 'reasoning') setPhase('构思中')
         if (chunk?.type === 'text-delta' && chunk.text) {
+          setPhase(undefined)
           if (!histReady.current) {
             pendingChunks.current.push({ seq: event.seq, text: chunk.text })
           } else if (event.seq > chunkFloor.current) {
@@ -426,7 +447,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
               <div className="bar"><i /></div>
               <div className="progress-row">
                 <span>
-                  GM 落笔中 · {elapsed.toFixed(1)}s
+                  GM {phase ?? '落笔中'} · {elapsed.toFixed(1)}s
                   {streaming && ` · ${streaming.length} 字`}
                 </span>
                 <button className="stop" onClick={() => void api.cancel(sessionId)}>■ 停止</button>
