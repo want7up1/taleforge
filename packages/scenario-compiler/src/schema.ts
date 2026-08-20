@@ -142,6 +142,12 @@ export const storySchema = z.object({
     rating: z.string().optional(),
     /** 本剧本自带的工艺指令。剧本对"怎么写"有绝对自由度。 */
     rules: z.array(z.string()).default([]),
+    /**
+     * 贴身提醒：BFF 随每回合注入到生成点旁，效力压过长局文风惯性。
+     * 写"每回合必须坚持、且模型容易在长局里漂移"的要求；内容全由剧本定（平台不携带强度）。
+     * 上限 600 字——贴身的前提是短。
+     */
+    reminder: z.string().min(1).max(600).optional(),
   }),
 })
 

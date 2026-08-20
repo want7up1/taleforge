@@ -59,6 +59,13 @@ test('剧本自带工艺 rules 无条数上限', () => {
   for (const r of rules) assert.ok(persona.includes(`- ${r}`))
 })
 
+test('craft.reminder：合法可选、超 600 字拒绝（贴身的前提是短）', () => {
+  const ok = storySchema.parse({ ...story, craft: { modules: [], rules: [], reminder: '每回合按词表直给。' } })
+  assert.equal(ok.craft.reminder, '每回合按词表直给。')
+  assert.equal(storySchema.parse(story).craft.reminder, undefined)
+  assert.throws(() => storySchema.parse({ ...story, craft: { modules: [], rules: [], reminder: '长'.repeat(601) } }))
+})
+
 test('工艺模块可组合，按声明顺序拼接', () => {
   const persona = renderPersona(
     storySchema.parse({ ...story, craft: { modules: ['shuang', 'harem'], rules: [] } }),

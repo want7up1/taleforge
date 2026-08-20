@@ -659,6 +659,35 @@ async function presetOf(sessionId: string): Promise<string | undefined> {
   return presetCache.get(sessionId)
 }
 
+/**
+ * 剧本贴身提醒（craft.reminder）：长局里正文先例的权重会压过 persona 深处的
+ * 声明（实测 30+ 回合后 rating 直接失效——推理里复述得出来，落笔跟着旧文风走），
+ * 把剧本自己声明的短提醒拼进回合头注入块，贴住生成点。每回合现读现取：
+ * 修改剧本重新发布后，进行中的局下一回合就吃到新文本，不受会话锁定影响。
+ */
+function reminderOf(presetId: string): string | undefined {
+  try {
+    const story = JSON.parse(
+      readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8'),
+    ) as { craft?: { reminder?: string } }
+    const text = story.craft?.reminder?.trim()
+    return text || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 正戏回合头注入块：平台固定流程 + 剧本贴身提醒。非剧本会话返回 undefined。 */
+async function turnHeadBlock(sessionId: string): Promise<{ type: string; text: string } | undefined> {
+  const preset = await presetOf(sessionId).catch(() => undefined)
+  if (!preset?.startsWith('story-')) return undefined
+  const reminder = reminderOf(preset)
+  return {
+    type: 'text',
+    text: `\n\n${TURN_FLOW_REMINDER}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
+  }
+}
+
 app.post('/app/sessions/:id/prompt', asyncRoute(async (req, res) => {
   const { text, mode } = (req.body ?? {}) as { text?: string; mode?: 'queue' | 'steer' }
   if (!text?.trim()) {
@@ -667,10 +696,8 @@ app.post('/app/sessions/:id/prompt', asyncRoute(async (req, res) => {
   }
   const content: { type: string; text: string }[] = [{ type: 'text', text }]
   if (!text.trimStart().startsWith('【场外】')) {
-    const preset = await presetOf(String(req.params.id)).catch(() => undefined)
-    if (preset?.startsWith('story-')) {
-      content.push({ type: 'text', text: `\n\n${TURN_FLOW_REMINDER}` })
-    }
+    const block = await turnHeadBlock(String(req.params.id))
+    if (block) content.push(block)
   }
   res.json(await rpc('session.prompt', {
     sessionId: req.params.id,
@@ -732,7 +759,8 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
     console.log(`[bff] 重写回合：fork@${anchor} → ${child}，清除旧线 ${removed} 个`)
     const content: { type: string; text: string }[] = [{ type: 'text', text: lastUserText }]
     if (!lastUserText.trimStart().startsWith('【场外】')) {
-      content.push({ type: 'text', text: `\n\n${TURN_FLOW_REMINDER}` })
+      const block = await turnHeadBlock(String(sessionId))
+      if (block) content.push(block)
     }
     await rpc('session.prompt', { sessionId: child, mode: 'queue', content })
     res.json({ sessionId: child })
