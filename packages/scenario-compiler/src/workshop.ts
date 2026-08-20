@@ -25,7 +25,7 @@ const WORKSHOP_PERSONA = `你是 TaleForge 的剧本工坊主持人。玩家来�
 ## 格式契约（taleforge.story.v1 速查）
 
 - 必填：format="taleforge.story.v1"、id（story- 前缀 kebab-case）、title、tagline、world{overview,tone[]}、protagonist{name,identity}、opening{scene,hook}、acts[]、craft{modules[]}。
-- 工艺模块目录：\`standard\`（通用叙事工艺，几乎必带）、\`shuang\`（爽文：碾压/捧场/密集正反馈）、\`harem\`（关系与张力：距离写在身体上、独处场景、越界瞬间）、\`hardcore\`（硬核：代价与失败是好戏、是但/否但）。按声明顺序生效，冲突时剧本自带 rules 优先。
+- 工艺模块目录：\`standard\`（通用叙事工艺，几乎必带）、\`shuang\`（爽文：碾压/捧场/密集正反馈）、\`harem\`（关系与张力：距离写在身体上、独处场景、越界瞬间）、\`hardcore\`（硬核：代价与失败是好戏、是但/否但）。按声明顺序生效，冲突时剧本自带 rules 优先。**模块一律强度中立：写多深由 rating 独占决定。**
 - **数值 guidance 铁律：机械规则，不写判断规则。** 什么事件加减多少要给具体数字（"战斗 -10～20"），各区段含义写清（30 和 70 差在哪），恢复规则必须机械（"任何喘息回合至少 +10"）。写"该恢复的时候恢复"的后果是 GM 永远不恢复。
 - checks.guidance 必须写死：哪几类行动必须掷（列类型）+ 难度几档各是多少。
 - 资源可声明 display 选位：strip（顶栏常驻）/ panel（卷宗）/ hidden（只记账不展示，倒计时和暗值用）；mechanics.groups 可自定义分组标题；绑定后续出场人物的资源必须加 revealWith: 该人物 cast id（出场前不可见，防剧透）。
