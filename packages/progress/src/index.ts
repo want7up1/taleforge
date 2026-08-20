@@ -138,7 +138,9 @@ export function apply(ctx: Context, config: Config) {
       + 'target 取值：world（世界设定补充/覆盖）、cast（修改某人物，需 id）、'
       + 'direction（剧情走向/风格指令）、anchor（增删改锚点，需 act、op、id）、'
       + 'resource / attribute（修改既有数值条目的语义或边界，需 id，'
-      + '可改 label/guidance/min/max/maxStep/floor；不支持中途增删条目）。',
+      + '可改 label/guidance/min/max/maxStep/floor；不支持中途增删条目——'
+      + '玩家要新数值条时如实说明：走剧本详情页「修改剧本」把条目写进剧本源，新开局生效；'
+      + '本局之内可先用 direction 修订把规则立起来、在正文里演，只是面板上不会有条）。',
     parameters: {
       revisions: {
         type: 'array',
@@ -288,7 +290,7 @@ export function validateRevisions(
       const id = String(raw.id ?? '')
       const known = (target === 'resource' ? numeric?.resources : numeric?.attributes) ?? []
       if (!known.some(n => n.id === id)) {
-        return rejected.push({ index, reason: `${target} id 不存在：${id}（中途增删条目走落盘+新局）` }) && undefined
+        return rejected.push({ index, reason: `${target} id 不存在：${id}（局内不能增删条目；新条目走剧本详情页「修改剧本」写进剧本源，新开局生效）` }) && undefined
       }
       // dsh 要求工具输出是无损 JSON：对象里不能出现值为 undefined 的键，未给的字段必须整个省略
       const fields = compact({
