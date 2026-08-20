@@ -122,7 +122,7 @@ export function Library({
             {/* 工坊：对话创作新剧本，与游戏存档互不影响 */}
             <article className="card workshop-card">
               <h3>✎ 剧本工坊</h3>
-              <p>和工坊 agent 对话，从零创作一部新剧本——访谈、发布、立即可玩。</p>
+              <p>和工坊 agent 对话——从零创作新剧本，或直接说"改某某剧本"修改任何已有剧本，发布即生效。</p>
               <button onClick={onWorkshop} disabled={blocked}>进入工坊 ▸</button>
             </article>
 

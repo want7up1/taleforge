@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { publishStory } from './index.ts'
+import { listStories, publishStory, readStory } from './index.ts'
 
 const story = {
   format: 'taleforge.story.v1',
@@ -45,6 +45,26 @@ test('发布非法剧本：逐条错误退回、不落盘任何文件', () => {
     assert.match(result.brief, /校验失败/)
     assert.ok(!existsSync(config.scenariosRoot), '校验失败不得写任何文件')
     assert.ok(!('id' in result) && !('title' in result), '失败时不携带 id/title 键（无损 JSON）')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('list_stories/read_story：只认 story- 前缀，读的是现行正式版，坏 id 拒绝', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tf-ws-'))
+  try {
+    const config = { scenariosRoot: path.join(root, 'scenarios'), presetsRoot: path.join(root, 'presets') }
+    publishStory(config, story)
+    // 混入非剧本 preset：不得出现在列表
+    mkdirSync(path.join(config.presetsRoot, 'workshop'), { recursive: true })
+
+    const list = listStories(config.presetsRoot)
+    assert.deepEqual(list, [{ id: 'story-ws-test', title: '工坊测试剧本', tagline: '一句话' }])
+
+    const loaded = readStory(config.presetsRoot, 'story-ws-test')
+    assert.equal((loaded as { title: string }).title, '工坊测试剧本')
+    assert.equal(readStory(config.presetsRoot, 'story-nope'), undefined)
+    assert.equal(readStory(config.presetsRoot, '../etc/passwd'), undefined, '路径穿越必须被 id 正则拦下')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
