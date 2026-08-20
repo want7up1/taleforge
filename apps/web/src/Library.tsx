@@ -1,17 +1,6 @@
-/** 主界面 = 游戏列表：继续冒险、剧本卡（点击进详情）、存档备份区。工坊与设置在顶栏。 */
-import { useCallback, useEffect, useState } from 'react'
-import { api } from './api.ts'
+/** 主界面 = 游戏列表：继续冒险一行 + 剧本卡（点击进详情）。会话与存档的管理都在剧本详情页。 */
 import { Brand } from './Brand.tsx'
 import type { CredentialStatus, ScenarioSummary, SessionSummary } from './types.ts'
-
-interface BackupItem {
-  name: string
-  sessionId: string
-  backedAt: number
-  title?: string
-  agentPreset?: string
-  turns?: number
-}
 
 interface Props {
   scenarios: ScenarioSummary[]
@@ -22,7 +11,6 @@ interface Props {
   onResume: (session: SessionSummary) => void
   onSettings: () => void
   onWorkshop: () => void
-  onRefresh: () => void
 }
 
 export function Library({
@@ -34,66 +22,9 @@ export function Library({
   onResume,
   onSettings,
   onWorkshop,
-  onRefresh,
 }: Props) {
   const blocked = credential && !credential.configured
   const current = sessions[0]
-  const [backups, setBackups] = useState<BackupItem[]>([])
-  const [note, setNote] = useState<string>()
-
-  const loadBackups = useCallback(() => {
-    api.listBackups().then(r => setBackups(r.items)).catch(() => undefined)
-  }, [])
-
-  useEffect(() => {
-    loadBackups()
-  }, [loadBackups])
-
-  const backupCurrent = async () => {
-    if (!current) return
-    setNote('备份中…')
-    try {
-      await api.backupSession(current.sessionId)
-      setNote('已备份——快照存在服务器上，容器重建不丢')
-      loadBackups()
-    } catch (err) {
-      setNote(String(err))
-    }
-  }
-
-  const deleteCurrent = async () => {
-    if (!current) return
-    if (!confirm('删除当前存档？此操作不可撤销（可先备份）。')) return
-    try {
-      await api.deleteSession(current.sessionId)
-      setNote('存档已删除')
-      onRefresh()
-    } catch (err) {
-      setNote(String(err))
-    }
-  }
-
-  const restore = async (name: string) => {
-    if (current && !confirm('恢复备份会覆盖当前存档，确定吗？')) return
-    setNote('恢复中…')
-    try {
-      await api.restoreBackup(name)
-      setNote('已恢复为当前存档')
-      onRefresh()
-    } catch (err) {
-      setNote(String(err))
-    }
-  }
-
-  const removeBackup = async (name: string) => {
-    if (!confirm('删除这份备份？')) return
-    try {
-      await api.deleteBackup(name)
-      loadBackups()
-    } catch (err) {
-      setNote(String(err))
-    }
-  }
 
   return (
     <div className="screen">
@@ -101,7 +32,7 @@ export function Library({
         <Brand />
         <div className="crumbs"><b>游戏</b></div>
         <div className="tools">
-          <button onClick={onWorkshop} disabled={blocked} title="剧本工坊：创作新剧本、修改已有剧本、导入导出">
+          <button onClick={onWorkshop} disabled={blocked} title="剧本工坊：创作新剧本、导入剧本">
             ✎<span className="t"> 工坊</span>
           </button>
           <button className={blocked ? 'attention' : ''} onClick={onSettings}>
@@ -123,22 +54,16 @@ export function Library({
             <>
               <h2 className="section-title">继续冒险</h2>
               <div className="saves">
-                <div className="save-row-wrap">
-                  <button className="save-row" onClick={() => onResume(current)}>
-                    <span className="save-title">
-                      {current.projections?.values.title ?? '未命名存档'}
-                    </span>
-                    <span className="save-meta">
-                      {scenarios.find(sc => sc.id === current.agentPreset)?.name ?? current.agentPreset}
-                      {' · '}
-                      {new Date(current.updatedAt).toLocaleString()}
-                    </span>
-                  </button>
-                  <div className="save-actions">
-                    <button className="ghost" onClick={() => void backupCurrent()} title="快照当前存档">⤓ 备份</button>
-                    <button className="ghost danger" onClick={() => void deleteCurrent()} title="删除当前存档">✕ 删除</button>
-                  </div>
-                </div>
+                <button className="save-row" onClick={() => onResume(current)}>
+                  <span className="save-title">
+                    {current.projections?.values.title ?? '未命名进度'}
+                  </span>
+                  <span className="save-meta">
+                    {scenarios.find(sc => sc.id === current.agentPreset)?.name ?? current.agentPreset}
+                    {' · '}
+                    {new Date(current.updatedAt).toLocaleString()}
+                  </span>
+                </button>
               </div>
             </>
           )}
@@ -162,32 +87,6 @@ export function Library({
             )}
           </div>
 
-          {backups.length > 0 && (
-            <>
-              <h2 className="section-title">存档备份</h2>
-              <div className="saves">
-                {backups.map(b => (
-                  <div key={b.name} className="save-row-wrap">
-                    <div className="save-row static">
-                      <span className="save-title">{b.title ?? b.sessionId.slice(0, 16)}</span>
-                      <span className="save-meta">
-                        {scenarios.find(sc => sc.id === b.agentPreset)?.name ?? b.agentPreset ?? '未知剧本'}
-                        {b.turns !== undefined && ` · ${b.turns} 回合`}
-                        {' · '}
-                        {new Date(b.backedAt).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="save-actions">
-                      <button className="ghost" onClick={() => void restore(b.name)}>↻ 恢复</button>
-                      <button className="ghost danger" onClick={() => void removeBackup(b.name)}>✕</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          {note && <p className="muted">{note}</p>}
           {error && <div className="error">{error}</div>}
         </div>
       </div>

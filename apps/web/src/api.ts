@@ -115,34 +115,42 @@ export const api = {
   /** 重开工坊，丢弃访谈进度 */
   workshopReset: () => json<{ sessionId: string }>(fetch('/app/workshop/reset', { method: 'POST' })),
 
+  /** 取（或创建）某剧本的修改对话（详情页唤起 GM 改剧本） */
+  editSession: (scenarioId: string) =>
+    json<{ sessionId: string }>(fetch(`/app/scenarios/${scenarioId}/edit-session`, { method: 'POST' })),
+
+  /** 重开某剧本的修改对话 */
+  editSessionReset: (scenarioId: string) =>
+    json<{ sessionId: string }>(fetch(`/app/scenarios/${scenarioId}/edit-session/reset`, { method: 'POST' })),
+
   /** 修订落盘：把本局场外修订合并回剧本源，下一局生效 */
   flushRevisions: (sessionId: string) =>
     json<{ applied: number; skipped: string[] }>(
       fetch(`/app/sessions/${sessionId}/revisions/flush`, { method: 'POST' }),
     ),
 
-  /** 删除剧本（数据源+编译产出）；有存档在用会被 409 拒绝 */
+  /** 删除剧本（数据源+编译产出+其存档与修改对话）；正在游玩会被 409 拒绝 */
   deleteScenario: (id: string) =>
     json<{ ok: true }>(fetch(`/app/scenarios/${id}`, { method: 'DELETE' })),
 
-  /** 删除存档 */
+  /** 删除进行中的会话 */
   deleteSession: (sessionId: string) =>
     json<{ ok: true }>(fetch(`/app/sessions/${sessionId}`, { method: 'DELETE' })),
 
-  /** 备份存档（服务器快照，随数据卷持久化） */
-  backupSession: (sessionId: string) =>
+  /** 存档：会话快照进服务器数据卷 */
+  saveSnapshot: (sessionId: string) =>
     json<{ name: string }>(fetch(`/app/sessions/${sessionId}/backup`, { method: 'POST' })),
 
-  listBackups: () =>
+  listSaves: () =>
     json<{ items: { name: string; sessionId: string; backedAt: number; title?: string; agentPreset?: string; turns?: number }[] }>(
       fetch('/app/save-backups'),
     ),
 
-  /** 恢复备份：成为当前唯一存档 */
-  restoreBackup: (name: string) =>
+  /** 读档：快照成为当前唯一会话 */
+  loadSave: (name: string) =>
     json<{ sessionId: string }>(fetch(`/app/save-backups/${name}/restore`, { method: 'POST' })),
 
-  deleteBackup: (name: string) =>
+  deleteSave: (name: string) =>
     json<{ ok: true }>(fetch(`/app/save-backups/${name}`, { method: 'DELETE' })),
 
   /** 导入剧本：校验失败返回逐条错误（400 也要解析正文，不走通用 json 助手） */

@@ -1,6 +1,7 @@
 /**
  * 剧本工坊：与工坊 agent 的对话视图。普通聊天形态——完整消息流 + 常驻输入框，
  * 没有行动块、没有机制面板。发布成功后玩家回剧本库即可开玩。
+ * 同一组件也承担剧本详情页唤起的"修改剧本"对话：换标题与开场白、收起创作包。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
@@ -13,15 +14,34 @@ interface Props {
   sessionId: string
   onExit: () => void
   onReset: () => void
+  /** 界面标题；默认工坊 */
+  title?: string
+  /** 空会话自动发送的第一条消息 */
+  opening?: string
+  /** 创作包（说明书下载 + 导入剧本）；修改对话里收起 */
+  showKit?: boolean
+  exitLabel?: string
+  resetConfirm?: string
 }
 
-export function Workshop({ sessionId, onExit, onReset }: Props) {
+export function Workshop({
+  sessionId,
+  onExit,
+  onReset,
+  title = '剧本工坊',
+  opening = '你好，我想创作一个新剧本。',
+  showKit = true,
+  exitLabel = '剧本库',
+  resetConfirm = '重开工坊会丢弃当前访谈进度（已发布的剧本不受影响），确定吗？',
+}: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
   const [running, setRunning] = useState(false)
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [importNote, setImportNote] = useState<string>()
+  /** 修改对话里对方是"GM"，创作访谈里是"工坊"——同一个 agent，两种在场身份 */
+  const agentLabel = showKit ? '工坊' : 'GM'
   const fileRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const opened = useRef<string | undefined>(undefined)
@@ -57,11 +77,11 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
         }
         histReady.current = true
         pendingChunks.current = []
-        // 空会话补发开场白，让工坊先自我介绍并抛出第一批选项
+        // 空会话补发开场白：工坊模式自我介绍抛选项；修改模式直接让 GM 读取目标剧本
         const started = events.some(e => e.event.type === 'turn/start')
         if (!started && opened.current !== sessionId) {
           opened.current = sessionId
-          api.prompt(sessionId, '你好，我想创作一个新剧本。').catch(err => setError(String(err)))
+          api.prompt(sessionId, opening).catch(err => setError(String(err)))
         }
       })
       .catch(err => setError(String(err)))
@@ -96,7 +116,7 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
       cancelled = true
       source.close()
     }
-  }, [sessionId])
+  }, [sessionId, opening])
 
   useEffect(() => {
     const el = listRef.current
@@ -133,46 +153,50 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
     <div className="screen">
       <header className="topbar">
         <Brand />
-        <div className="crumbs"><b>剧本工坊</b>{running && <span>构思中…</span>}</div>
+        <div className="crumbs"><b>{title}</b>{running && <span>构思中…</span>}</div>
         <div className="tools">
-          <a className="tool-link" href="/app/authoring-guide" title="下载创作说明书（自己写剧本用）">
-            ⤓<span className="t"> 说明书</span>
-          </a>
+          {showKit && (
+            <a className="tool-link" href="/app/authoring-guide" title="下载创作说明书（自己写剧本用）">
+              ⤓<span className="t"> 说明书</span>
+            </a>
+          )}
           <button
             onClick={() => {
-              if (confirm('重开工坊会丢弃当前访谈进度（已发布的剧本不受影响），确定吗？')) onReset()
+              if (confirm(resetConfirm)) onReset()
             }}
-            title="重开工坊"
+            title="重开对话"
           >
             ↺<span className="t"> 重开</span>
           </button>
-          <button onClick={onExit} title="返回">←<span className="t"> 剧本库</span></button>
+          <button onClick={onExit} title="返回">←<span className="t"> {exitLabel}</span></button>
         </div>
       </header>
 
       <div className="scroll" ref={listRef}>
         <div className="column workshop-chat">
           {/* 创作包：说明书在顶栏；此处导入外部写好的 story.json */}
-          <div className="workshop-kit">
-            <span className="muted">创作包：照「⤓ 说明书」自己写（或让别的 AI 写）一份 story.json，导入即校验上架；同 id 覆盖更新。</span>
-            <button className="ghost" onClick={() => fileRef.current?.click()}>导入剧本 ⤒</button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".json,application/json"
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) void importFile(file)
-                e.target.value = ''
-              }}
-            />
-          </div>
+          {showKit && (
+            <div className="workshop-kit">
+              <span className="muted">创作包：照「⤓ 说明书」自己写（或让别的 AI 写）一份 story.json，导入即校验上架；同 id 覆盖更新。</span>
+              <button className="ghost" onClick={() => fileRef.current?.click()}>导入剧本 ⤒</button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".json,application/json"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void importFile(file)
+                  e.target.value = ''
+                }}
+              />
+            </div>
+          )}
           {importNote && <p className="muted import-note">{importNote}</p>}
 
           {messages.map((m, i) => (
             <div key={m.seq ?? i} className={`ws-msg ${m.role}`}>
-              <span className="label">{m.role === 'user' ? '你' : '工坊'}</span>
+              <span className="label">{m.role === 'user' ? '你' : agentLabel}</span>
               {m.role === 'assistant'
                 ? <StoryMarkdown text={m.text} characters={[]} />
                 : <p>{m.text}</p>}
@@ -180,12 +204,12 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
           ))}
           {streaming && (
             <div className="ws-msg assistant">
-              <span className="label">工坊</span>
+              <span className="label">{agentLabel}</span>
               <StoryMarkdown text={streaming} characters={[]} />
               <span className="caret" />
             </div>
           )}
-          {messages.length === 0 && !streaming && <p className="dim">正在唤醒工坊…</p>}
+          {messages.length === 0 && !streaming && <p className="dim">正在唤醒{agentLabel}…</p>}
           {error && <div className="error">{error}</div>}
 
           <div className="composer">
@@ -193,7 +217,7 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
             <textarea
               value={input}
               rows={2}
-              placeholder={running ? '工坊落笔中…' : '说说你想要什么样的剧本'}
+              placeholder={running ? `${agentLabel}落笔中…` : showKit ? '说说你想要什么样的剧本' : '说说这个剧本要改哪里'}
               disabled={running}
               onChange={e => setInput(e.target.value)}
               onKeyDown={(e) => {

@@ -1,21 +1,34 @@
 /**
- * 剧本详情页：介绍与各项设定的玩家可见视图（BFF 已剥暗线；幕结构只露第一幕防剧透）。
- * 动作：开始游戏 / 导出 / 删除；修改剧本走工坊对话。
+ * 剧本详情页：介绍与各项设定的玩家可见视图（BFF 已剥暗线；幕结构只露第一幕防剧透），
+ * 加上这个剧本自己的进行中会话与存档（快照）。修改剧本 = 在本页唤起 GM 对话。
  */
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
-import type { StoryDetail } from './types.ts'
+import type { SessionSummary, StoryDetail } from './types.ts'
+
+interface SaveItem {
+  name: string
+  sessionId: string
+  backedAt: number
+  title?: string
+  agentPreset?: string
+  turns?: number
+}
 
 interface Props {
   story: StoryDetail
-  /** 当前有存档时开始新局需要确认覆盖 */
-  hasSave: boolean
+  /** 全平台当前唯一进行中的会话（可能属于别的剧本——开新局/读档都会覆盖它） */
+  current?: SessionSummary
   blocked?: boolean
   onStart: () => void
+  onResume: (session: SessionSummary) => void
+  /** 读档成功后带着恢复出的会话直接进游戏 */
+  onLoaded: (sessionId: string) => void
+  onEdit: () => void
   onDeleted: () => void
+  onRefresh: () => void
   onBack: () => void
-  onWorkshop: () => void
 }
 
 const MODULE_NAME: Record<string, string> = {
@@ -25,15 +38,84 @@ const MODULE_NAME: Record<string, string> = {
   hardcore: '硬核',
 }
 
-export function ScenarioDetail({ story, hasSave, blocked, onStart, onDeleted, onBack, onWorkshop }: Props) {
+export function ScenarioDetail({
+  story,
+  current,
+  blocked,
+  onStart,
+  onResume,
+  onLoaded,
+  onEdit,
+  onDeleted,
+  onRefresh,
+  onBack,
+}: Props) {
+  const [saves, setSaves] = useState<SaveItem[]>([])
   const [note, setNote] = useState<string>()
+  /** 本剧本自己的进行中会话（current 可能属于别的剧本，那种只用于覆盖确认） */
+  const mine = current?.agentPreset === story.id ? current : undefined
+
+  const loadSaves = useCallback(() => {
+    api.listSaves()
+      .then(r => setSaves(r.items.filter(s => s.agentPreset === story.id)))
+      .catch(() => undefined)
+  }, [story.id])
+
+  useEffect(() => {
+    loadSaves()
+  }, [loadSaves])
 
   const remove = async () => {
-    if (!confirm(`删除《${story.title}》？剧本源与上架版本都会移除，建议先导出留底。`)) return
+    if (!confirm(`删除《${story.title}》？剧本源、上架版本连同它的存档都会移除，建议先导出留底。`)) return
     setNote('删除中…')
     try {
       await api.deleteScenario(story.id)
       onDeleted()
+    } catch (err) {
+      setNote(String(err))
+    }
+  }
+
+  const snapshot = async () => {
+    if (!mine) return
+    setNote('存档中…')
+    try {
+      await api.saveSnapshot(mine.sessionId)
+      setNote('已存档——快照存在服务器上，容器重建不丢')
+      loadSaves()
+    } catch (err) {
+      setNote(String(err))
+    }
+  }
+
+  const removeSession = async () => {
+    if (!mine) return
+    if (!confirm('删除进行中的会话？此操作不可撤销（可先存档）。')) return
+    try {
+      await api.deleteSession(mine.sessionId)
+      setNote('会话已删除')
+      onRefresh()
+    } catch (err) {
+      setNote(String(err))
+    }
+  }
+
+  const load = async (name: string) => {
+    if (current && !confirm('读档会覆盖当前进行中的会话，确定吗？')) return
+    setNote('读档中…')
+    try {
+      const { sessionId } = await api.loadSave(name)
+      onLoaded(sessionId)
+    } catch (err) {
+      setNote(String(err))
+    }
+  }
+
+  const removeSave = async (name: string) => {
+    if (!confirm('删除这份存档？')) return
+    try {
+      await api.deleteSave(name)
+      loadSaves()
     } catch (err) {
       setNote(String(err))
     }
@@ -75,17 +157,58 @@ export function ScenarioDetail({ story, hasSave, blocked, onStart, onDeleted, on
             <button
               disabled={blocked}
               onClick={() => {
-                if (hasSave && !confirm('开新局会覆盖当前存档（可先回列表备份），确定吗？')) return
+                if (current && !confirm('开新局会覆盖当前进行中的会话（可先存档），确定吗？')) return
                 onStart()
               }}
             >
-              {hasSave ? '覆盖并开始 ▸' : '开始游戏 ▸'}
+              {current ? '覆盖并开始 ▸' : '开始游戏 ▸'}
             </button>
+            <button className="ghost" onClick={onEdit} disabled={blocked} title="唤起 GM 对话修改本剧本">✎ 修改剧本</button>
             <a className="ghost" href={`/app/scenarios/${story.id}/export`} title="导出剧本源（含 GM 暗线，看了会剧透）">⤓ 导出</a>
             <button className="ghost danger" onClick={() => void remove()}>✕ 删除</button>
-            <button className="ghost" onClick={onWorkshop} title="进工坊对话修改本剧本">✎ 去工坊改</button>
           </div>
           {note && <p className="muted">{note}</p>}
+
+          {mine && (
+            <section>
+              <h3 className="section-title">进行中</h3>
+              <div className="saves">
+                <div className="save-row-wrap">
+                  <button className="save-row" onClick={() => onResume(mine)}>
+                    <span className="save-title">{mine.projections?.values.title ?? '未命名进度'}</span>
+                    <span className="save-meta">{new Date(mine.updatedAt).toLocaleString()} · 点击继续</span>
+                  </button>
+                  <div className="save-actions">
+                    <button className="ghost" onClick={() => void snapshot()} title="快照当前进度">⤓ 存档</button>
+                    <button className="ghost danger" onClick={() => void removeSession()} title="删除进行中的会话">✕ 删除</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {saves.length > 0 && (
+            <section>
+              <h3 className="section-title">存档</h3>
+              <div className="saves">
+                {saves.map(s => (
+                  <div key={s.name} className="save-row-wrap">
+                    <div className="save-row static">
+                      <span className="save-title">{s.title ?? s.sessionId.slice(0, 16)}</span>
+                      <span className="save-meta">
+                        {s.turns !== undefined && `${s.turns} 回合 · `}
+                        {new Date(s.backedAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="save-actions">
+                      <button className="ghost" onClick={() => void load(s.name)}>↻ 读档</button>
+                      <button className="ghost danger" onClick={() => void removeSave(s.name)}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section>
             <h3 className="section-title">世界</h3>

@@ -212,7 +212,8 @@ app.post('/app/scenarios/import', (req, res) => {
 
 /**
  * 删除剧本：数据卷源 + 编译产出一并移除。仓库已无内置种子，全部剧本
- * 都在数据根，删除语义干净。有存档正用着的剧本不许删（会话恢复依赖 preset）。
+ * 都在数据根，删除语义干净。有会话正玩着的剧本不许删（会话恢复依赖 preset）；
+ * 该剧本的存档快照与修改对话级联清除，不留孤儿。
  */
 app.delete('/app/scenarios/:id', asyncRoute(async (req, res) => {
   const id = String(req.params.id)
@@ -223,16 +224,34 @@ app.delete('/app/scenarios/:id', asyncRoute(async (req, res) => {
   const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
   const inUse = items.some(s => !s.blank && s.agentPreset === id && locateSession(s.sessionId) !== undefined)
   if (inUse) {
-    res.status(409).json({ error: { code: 'in-use', message: '有存档正在使用该剧本——先删除或备份那个存档' } })
+    res.status(409).json({ error: { code: 'in-use', message: '这个剧本正在游玩中——先在剧本页删除进行中的会话（可先存档）' } })
     return
   }
   rmSync(path.join(scenariosRoot, id.replace(/^story-/, '')), { recursive: true, force: true })
   rmSync(path.join(presetsRoot, id), { recursive: true, force: true })
-  console.log(`[bff] 已删除剧本 ${id}`)
+  // 级联：该剧本的存档快照
+  for (const e of readdirSync(backupsRoot, { withFileTypes: true })) {
+    if (!e.isDirectory() || !BACKUP_NAME.test(e.name)) continue
+    try {
+      const meta = JSON.parse(readFileSync(path.join(backupsRoot, e.name, 'backup-meta.json'), 'utf8')) as BackupMeta
+      if (meta.agentPreset === id) rmSync(path.join(backupsRoot, e.name), { recursive: true, force: true })
+    } catch { /* 无 meta 的残目录不动它 */ }
+  }
+  // 级联：该剧本的修改对话
+  const editMap = readEditMap()
+  if (editMap[id]) {
+    const found = locateSession(editMap[id])
+    if (found) rmSync(found.dir, { recursive: true, force: true })
+    presetCache.delete(editMap[id])
+    const fresh = readEditMap()
+    delete fresh[id]
+    writeEditMap(fresh)
+  }
+  console.log(`[bff] 已删除剧本 ${id}（含其存档与修改对话）`)
   res.json({ ok: true })
 }))
 
-// ---- 存档：删除 / 备份 / 恢复 ----
+// ---- 会话与存档：删除 / 存档（快照）/ 读档 ----
 
 const backupsRoot = path.join(dshHome, 'save-backups')
 mkdirSync(backupsRoot, { recursive: true })
@@ -258,29 +277,63 @@ interface BackupMeta {
   turns?: number
 }
 
+// ---- 剧本修改对话：详情页唤起 GM 改剧本，按剧本各自常驻一个会话（工坊 preset，带读写剧本源的工具） ----
+
+const editMapPath = path.join(dshHome, 'edit-sessions.json')
+
+function readEditMap(): Record<string, string> {
+  try {
+    return JSON.parse(readFileSync(editMapPath, 'utf8')) as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+function writeEditMap(map: Record<string, string>): void {
+  writeFileSync(editMapPath, JSON.stringify(map))
+}
+
+/**
+ * 修改对话是否还活着。session.create 返回和目录落盘之间有延迟，
+ * 不能只按磁盘即时裁决：dsh 内存里仍是 blank 的会话同样视为活着。
+ * 映射条目只在替换/删除时清理，这里只判活不动映射。
+ */
+async function editSessionAlive(sessionId: string): Promise<boolean> {
+  if (locateSession(sessionId) !== undefined) return true
+  const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
+  const found = items.find(s => s.sessionId === sessionId)
+  return found !== undefined && found.blank
+}
+
+/** 单存档清理时除目标会话外必须保住的：常驻工坊 + 各剧本的修改对话（宁多保不误删）。 */
+async function protectedSessions(): Promise<string[]> {
+  const workshop = await latestWorkshopId().catch(() => undefined)
+  return [...(workshop ? [workshop] : []), ...Object.values(readEditMap())]
+}
+
 app.delete('/app/sessions/:id', asyncRoute(async (req, res) => {
   const sessionId = String(req.params.id)
   if ((await presetOf(sessionId).catch(() => undefined)) === 'workshop') {
-    res.status(400).json({ error: { code: 'not-a-save', message: '工坊会话不是存档' } })
+    res.status(400).json({ error: { code: 'not-a-save', message: '工坊会话不是游戏会话' } })
     return
   }
   const found = locateSession(sessionId)
   if (!found) {
-    res.status(404).json({ error: { code: 'not-found', message: '存档不存在' } })
+    res.status(404).json({ error: { code: 'not-found', message: '会话不存在' } })
     return
   }
   rmSync(found.dir, { recursive: true, force: true })
   presetCache.delete(sessionId)
-  console.log(`[bff] 已删除存档 ${sessionId}`)
+  console.log(`[bff] 已删除会话 ${sessionId}`)
   res.json({ ok: true })
 }))
 
-/** 备份存档：整目录快照进数据卷 save-backups/，容器重建不丢。 */
+/** 存档：把会话整目录快照进数据卷 save-backups/，容器重建不丢。 */
 app.post('/app/sessions/:id/backup', asyncRoute(async (req, res) => {
   const sessionId = String(req.params.id)
   const found = locateSession(sessionId)
   if (!found) {
-    res.status(404).json({ error: { code: 'not-found', message: '存档不存在' } })
+    res.status(404).json({ error: { code: 'not-found', message: '会话不存在' } })
     return
   }
   const { items } = await rpc<{ items: (SessionListItem & { projections?: { values?: { title?: string; sessionStats?: { turns?: number } } } })[] }>('session.list', {})
@@ -320,12 +373,12 @@ app.get('/app/save-backups', (_req, res) => {
   res.json({ items })
 })
 
-/** 恢复备份：拷回原位并成为当前唯一存档（单存档语义不变，工坊会话保留）。 */
+/** 读档：快照拷回原位并成为当前唯一会话（单存档语义不变，工坊与修改对话保留）。 */
 app.post('/app/save-backups/:name/restore', asyncRoute(async (req, res) => {
   const name = String(req.params.name)
   const src = path.join(backupsRoot, name)
   if (!BACKUP_NAME.test(name) || !existsSync(src)) {
-    res.status(404).json({ error: { code: 'not-found', message: '备份不存在' } })
+    res.status(404).json({ error: { code: 'not-found', message: '存档不存在' } })
     return
   }
   const meta = JSON.parse(readFileSync(path.join(src, 'backup-meta.json'), 'utf8')) as BackupMeta
@@ -334,16 +387,15 @@ app.post('/app/save-backups/:name/restore', asyncRoute(async (req, res) => {
   mkdirSync(path.dirname(target), { recursive: true })
   cpSync(src, target, { recursive: true })
   rmSync(path.join(target, 'backup-meta.json'), { force: true })
-  const workshop = await latestWorkshopId().catch(() => undefined)
-  pruneSessions(new Set([meta.sessionId, ...(workshop ? [workshop] : [])]))
-  console.log(`[bff] 已恢复备份 ${name} → ${meta.sessionId}`)
+  pruneSessions(new Set([meta.sessionId, ...(await protectedSessions())]))
+  console.log(`[bff] 已读档 ${name} → ${meta.sessionId}`)
   res.json({ sessionId: meta.sessionId })
 }))
 
 app.delete('/app/save-backups/:name', (req, res) => {
   const name = String(req.params.name)
   if (!BACKUP_NAME.test(name)) {
-    res.status(404).json({ error: { code: 'not-found', message: '备份不存在' } })
+    res.status(404).json({ error: { code: 'not-found', message: '存档不存在' } })
     return
   }
   rmSync(path.join(backupsRoot, name), { recursive: true, force: true })
@@ -413,11 +465,12 @@ interface SessionListItem {
   agentPreset?: string
 }
 
-/** 工坊会话与游戏存档并存：单存档清理时要保住最近的工坊会话。 */
+/** 常驻工坊会话（不含剧本修改对话，它们同样是 workshop preset 但按剧本记账）。 */
 async function latestWorkshopId(): Promise<string | undefined> {
+  const editIds = new Set(Object.values(readEditMap()))
   const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
   return items
-    .filter(s => s.agentPreset === 'workshop' && locateSession(s.sessionId) !== undefined)
+    .filter(s => s.agentPreset === 'workshop' && !editIds.has(s.sessionId) && locateSession(s.sessionId) !== undefined)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]?.sessionId
 }
 
@@ -434,10 +487,10 @@ app.get('/app/sessions', asyncRoute(async (_req, res) => {
 
 app.post('/app/sessions', asyncRoute(async (req, res) => {
   const { agentPreset } = (req.body ?? {}) as { agentPreset?: string }
-  const workshop = await latestWorkshopId()
+  const shielded = await protectedSessions()
   const created = await rpc<{ sessionId: string }>('session.create', agentPreset ? { agentPreset } : {})
-  // 单存档：新局一旦建立，旧局连同调试残留一并清除；工坊会话保留
-  const keep = new Set([created.sessionId, ...(workshop ? [workshop] : [])])
+  // 单存档：新局一旦建立，旧局连同调试残留一并清除；工坊与修改对话保留
+  const keep = new Set([created.sessionId, ...shielded])
   const removed = pruneSessions(keep)
   if (removed > 0) console.log(`[bff] 开新局，清除旧存档 ${removed} 个`)
   res.json(created)
@@ -456,14 +509,50 @@ app.post('/app/workshop', asyncRoute(async (_req, res) => {
   res.json(created)
 }))
 
-/** 重开工坊（丢弃当前访谈进度），游戏存档不受影响。 */
+/** 重开工坊（丢弃当前访谈进度），游戏会话与各剧本的修改对话不受影响。 */
 app.post('/app/workshop/reset', asyncRoute(async (_req, res) => {
   const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
   const game = items
-    .filter(s => !s.blank && s.agentPreset !== 'workshop')
+    .filter(s => !s.blank && s.agentPreset !== 'workshop' && locateSession(s.sessionId) !== undefined)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]?.sessionId
+  const editIds = Object.values(readEditMap())
   const created = await rpc<{ sessionId: string }>('session.create', { agentPreset: 'workshop' })
-  pruneSessions(new Set([created.sessionId, ...(game ? [game] : [])]))
+  pruneSessions(new Set([created.sessionId, ...editIds, ...(game ? [game] : [])]))
+  res.json(created)
+}))
+
+/** 取（或创建）某剧本的修改对话：详情页"修改剧本"唤起，锚定该剧本常驻。 */
+app.post('/app/scenarios/:id/edit-session', asyncRoute(async (req, res) => {
+  const id = String(req.params.id)
+  if (!/^story-[a-z0-9][a-z0-9-]*$/.test(id) || !existsSync(path.join(presetsRoot, id, 'story.json'))) {
+    res.status(404).json({ error: { code: 'not-found', message: '剧本不存在' } })
+    return
+  }
+  const existing = readEditMap()[id]
+  if (existing && await editSessionAlive(existing)) {
+    res.json({ sessionId: existing })
+    return
+  }
+  const created = await rpc<{ sessionId: string }>('session.create', { agentPreset: 'workshop' })
+  writeEditMap({ ...readEditMap(), [id]: created.sessionId })
+  res.json(created)
+}))
+
+/** 重开某剧本的修改对话（丢弃对话进度，已发布的修改不受影响）。 */
+app.post('/app/scenarios/:id/edit-session/reset', asyncRoute(async (req, res) => {
+  const id = String(req.params.id)
+  if (!/^story-[a-z0-9][a-z0-9-]*$/.test(id)) {
+    res.status(404).json({ error: { code: 'not-found', message: '剧本不存在' } })
+    return
+  }
+  const old = readEditMap()[id]
+  const created = await rpc<{ sessionId: string }>('session.create', { agentPreset: 'workshop' })
+  if (old) {
+    const found = locateSession(old)
+    if (found) rmSync(found.dir, { recursive: true, force: true })
+    presetCache.delete(old)
+  }
+  writeEditMap({ ...readEditMap(), [id]: created.sessionId })
   res.json(created)
 }))
 
@@ -633,8 +722,8 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
   const lastUserText = textOfBlocks(flat.slice(lastStart).find(e => e.type === 'user/message')?.data.content)
   const turnEnds = flat.filter(e => e.type === 'turn/end')
 
-  const workshop = await latestWorkshopId()
-  const protect = (id: string) => new Set([id, ...(workshop ? [workshop] : [])])
+  const shielded = await protectedSessions()
+  const protect = (id: string) => new Set([id, ...shielded])
 
   if (turnEnds.length >= 2 && lastUserText) {
     const anchor = turnEnds[turnEnds.length - 2].seq

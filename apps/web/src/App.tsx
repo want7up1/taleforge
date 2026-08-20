@@ -9,7 +9,7 @@ import { Settings } from './Settings.tsx'
 import { Workshop } from './Workshop.tsx'
 import type { CredentialStatus, ScenarioSummary, SessionSummary, StoryDetail } from './types.ts'
 
-type View = 'library' | 'settings' | 'play' | 'history' | 'workshop' | 'scenario'
+type View = 'library' | 'settings' | 'play' | 'history' | 'workshop' | 'scenario' | 'edit'
 
 export function App() {
   const [view, setView] = useState<View>('library')
@@ -21,6 +21,8 @@ export function App() {
   const [story, setStory] = useState<StoryDetail>()
   /** 详情页正在查看的剧本 */
   const [detail, setDetail] = useState<StoryDetail>()
+  /** 详情页唤起的修改对话（按剧本记账，防止串到别的剧本） */
+  const [edit, setEdit] = useState<{ scenarioId: string; sessionId: string }>()
   const [error, setError] = useState<string>()
 
   const refresh = useCallback(async () => {
@@ -45,9 +47,20 @@ export function App() {
   // ---- hash 路由：每个界面一条浏览器历史，前进/后退可用 ----
 
   useEffect(() => {
-    const target = view === 'scenario' && detail ? `#/scenario/${detail.id}` : `#/${view}`
+    const target
+      = view === 'scenario' && detail ? `#/scenario/${detail.id}`
+        : view === 'edit' && detail ? `#/edit/${detail.id}`
+          : `#/${view}`
     if (location.hash !== target) location.hash = target
   }, [view, detail])
+
+  /** 进入某剧本的修改对话：详情与会话就绪后切视图 */
+  const openEdit = useCallback(async (scenarioStory: StoryDetail) => {
+    setError(undefined)
+    const { sessionId } = await api.editSession(scenarioStory.id)
+    setEdit({ scenarioId: scenarioStory.id, sessionId })
+    setView('edit')
+  }, [])
 
   useEffect(() => {
     const onHash = () => {
@@ -60,6 +73,18 @@ export function App() {
         }).catch(() => setView('library'))
         return
       }
+      if (location.hash.startsWith('#/edit/')) {
+        const id = location.hash.slice('#/edit/'.length)
+        if (detail?.id === id && edit?.scenarioId === id) return setView('edit')
+        void Promise.all([api.scenario(id), api.editSession(id)])
+          .then(([s, es]) => {
+            setDetail(s)
+            setEdit({ scenarioId: id, sessionId: es.sessionId })
+            setView('edit')
+          })
+          .catch(() => setView('library'))
+        return
+      }
       const v = location.hash.replace(/^#\//, '') as View
       if (!['library', 'settings', 'play', 'history', 'workshop'].includes(v)) return setView('library')
       // 需要前置状态的界面缺状态时回退剧本库
@@ -69,9 +94,9 @@ export function App() {
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
-  }, [active, workshopId, detail])
+  }, [active, workshopId, detail, edit])
 
-  // 刷新/深链恢复：带着 #/play、#/workshop、#/scenario/<id> 打开时直接回到对应界面
+  // 刷新/深链恢复：带着 #/play、#/workshop、#/scenario/<id>、#/edit/<id> 打开时直接回到对应界面
   useEffect(() => {
     const initial = location.hash
     if (initial === '#/play' || initial === '#/history') {
@@ -88,6 +113,12 @@ export function App() {
       void api.scenario(id).then((s) => {
         setDetail(s)
         setView('scenario')
+      }).catch(() => undefined)
+    } else if (initial.startsWith('#/edit/')) {
+      const id = initial.slice('#/edit/'.length)
+      void api.scenario(id).then(async (s) => {
+        setDetail(s)
+        await openEdit(s)
       }).catch(() => undefined)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -182,20 +213,51 @@ export function App() {
     )
   }
 
+  if (view === 'edit' && detail && edit?.scenarioId === detail.id) {
+    return (
+      <Workshop
+        sessionId={edit.sessionId}
+        title={`修改 · ${detail.title}`}
+        opening={`我要修改剧本《${detail.title}》（id：${detail.id}）。请先用工具读取它的现行正式版，简要确认核心设定，然后等我说要改哪里；发布前把变更点列给我确认。`}
+        showKit={false}
+        exitLabel="返回剧本"
+        resetConfirm="重开会丢弃这段修改对话（已发布的修改不受影响），确定吗？"
+        onExit={() => {
+          // 修改可能已发布：回详情页前重新拉一次现行正式版
+          void api.scenario(detail.id).then(setDetail).catch(() => undefined)
+          setView('scenario')
+          void refresh()
+        }}
+        onReset={() => {
+          void api.editSessionReset(detail.id)
+            .then(({ sessionId }) => setEdit({ scenarioId: detail.id, sessionId }))
+            .catch(err => setError(String(err)))
+        }}
+      />
+    )
+  }
+
   if (view === 'scenario' && detail) {
     return (
       <ScenarioDetail
         story={detail}
-        hasSave={sessions.length > 0}
+        current={sessions[0]}
         blocked={credential && !credential.configured}
         onStart={() => void startScenario(detail.id)}
+        onResume={s => void resumeSession(s)}
+        onLoaded={(sessionId) => {
+          void enterSession(sessionId, detail.id)
+          void refresh()
+        }}
+        onEdit={() => void openEdit(detail).catch(err => setError(String(err)))}
         onDeleted={() => {
           setDetail(undefined)
+          setEdit(undefined)
           setView('library')
           void refresh()
         }}
+        onRefresh={() => void refresh()}
         onBack={() => setView('library')}
-        onWorkshop={() => void enterWorkshop()}
       />
     )
   }
@@ -229,7 +291,6 @@ export function App() {
       onResume={s => void resumeSession(s)}
       onSettings={() => setView('settings')}
       onWorkshop={() => void enterWorkshop()}
-      onRefresh={() => void refresh()}
     />
   )
 }
