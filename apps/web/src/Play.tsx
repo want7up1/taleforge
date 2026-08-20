@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.ts'
+import { Brand } from './Brand.tsx'
 import { Dossier } from './Dossier.tsx'
 import { foldHistory, lastTurnDigest, messageOfEvent } from './fold.ts'
 import { GmChat, type GmChatItem } from './GmChat.tsx'
@@ -393,7 +394,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
   return (
     <div className="screen">
       <header className="topbar">
-        <span className="brand">TALEFORGE</span>
+        <Brand />
         <div className="crumbs">
           <b>{story?.title ?? '游戏'}</b>
           {currentAct && <span>{ended ? '剧终' : currentAct.title}</span>}

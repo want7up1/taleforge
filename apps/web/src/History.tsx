@@ -1,6 +1,7 @@
 /** 回顾页：完整对局记录。游玩屏只渲染最新一回合，往前翻到这里来。 */
 import { useEffect, useState } from 'react'
 import { api } from './api.ts'
+import { Brand } from './Brand.tsx'
 import { foldHistory } from './fold.ts'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { parseTurn } from './turn.ts'
@@ -25,7 +26,7 @@ export function History({ sessionId, story, onBack }: Props) {
   return (
     <div className="screen">
       <header className="topbar">
-        <span className="brand">TALEFORGE</span>
+        <Brand />
         <div className="crumbs">
           <b>回顾</b>
           {story && <span>{story.title}</span>}

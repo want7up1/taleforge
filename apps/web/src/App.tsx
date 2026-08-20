@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.ts'
+import { Brand } from './Brand.tsx'
 import { History } from './History.tsx'
 import { Library } from './Library.tsx'
 import { Play } from './Play.tsx'
@@ -157,7 +158,7 @@ export function App() {
     return (
       <div className="screen">
         <header className="topbar">
-          <span className="brand">TALEFORGE</span>
+          <Brand />
           <div className="crumbs"><b>设置</b></div>
           <div className="tools">
             <button onClick={() => setView('library')}>← 剧本库</button>

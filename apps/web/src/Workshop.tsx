@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
+import { Brand } from './Brand.tsx'
 import { foldHistory, messageOfEvent } from './fold.ts'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import type { ChatMessage, MuxFrame } from './types.ts'
@@ -115,7 +116,7 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
   return (
     <div className="screen">
       <header className="topbar">
-        <span className="brand">TALEFORGE</span>
+        <Brand />
         <div className="crumbs"><b>剧本工坊</b>{running && <span>构思中…</span>}</div>
         <div className="tools">
           <a className="tool-link" href="/app/authoring-guide" title="下载创作说明书（自己写剧本用）">

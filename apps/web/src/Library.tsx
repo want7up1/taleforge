@@ -1,6 +1,7 @@
 /** 标题页：剧本选择、存档续玩、创作包导入导出。 */
 import { useRef, useState } from 'react'
 import { api } from './api.ts'
+import { Brand } from './Brand.tsx'
 import type { CredentialStatus, ScenarioSummary, SessionSummary } from './types.ts'
 
 interface Props {
@@ -52,7 +53,7 @@ export function Library({
   return (
     <div className="screen">
       <header className="topbar">
-        <span className="brand">TALEFORGE</span>
+        <Brand />
         <div className="crumbs"><b>剧本库</b></div>
         <div className="tools">
           <button className={blocked ? 'attention' : ''} onClick={onSettings}>
