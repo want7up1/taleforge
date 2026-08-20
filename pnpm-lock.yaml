@@ -20,6 +20,9 @@ importers:
       '@taleforge/scenario-compiler':
         specifier: workspace:*
         version: link:../../packages/scenario-compiler
+      '@taleforge/workshop':
+        specifier: workspace:*
+        version: link:../../packages/workshop
       express:
         specifier: ^5.1.0
         version: 5.2.1(supports-color@8.1.1)

@@ -1037,3 +1037,28 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
 .ws-msg.user p { color: var(--muted); white-space: pre-wrap; }
 .ws-msg.assistant { border-left-color: var(--amber); }
 .workshop-chat .composer { margin-top: 8px; }
+
+/* ---- 创作包：导入导出 ---- */
+
+.card-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.export-link, .card-actions a.ghost {
+  font-size: 0.82rem;
+  color: var(--faint);
+  text-decoration: none;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  padding: 6px 10px;
+}
+.card-actions a.ghost:hover, .export-link:hover { color: var(--amber); border-color: var(--amber); }
+.import-note { white-space: pre-wrap; font-size: 0.82rem; margin-top: 8px; }
+.tools .tool-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 10px;
+  color: var(--fg);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  font-size: 14px;
+}
+.tools .tool-link:hover { border-color: var(--phosphor-dim); color: var(--phosphor); }

@@ -13,6 +13,7 @@ import {
   storySchema,
   type RevisionLike,
 } from '@taleforge/scenario-compiler'
+import { publishStory } from '@taleforge/workshop'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
@@ -173,6 +174,41 @@ app.get('/app/scenarios', asyncRoute(async (_req, res) => {
   )
   res.json({ items: presets.filter(p => p.id.startsWith('story-')) })
 }))
+
+// ---- 创作包：说明书下载、剧本导出与导入 ----
+
+/** 创作说明书（兼平台能力契约）。写外发包、给外部 AI、自己手写剧本都用它。 */
+app.get('/app/authoring-guide', (_req, res) => {
+  res.setHeader('content-type', 'text/markdown; charset=utf-8')
+  res.setHeader('content-disposition', 'attachment; filename="AUTHORING.md"')
+  res.send(readFileSync(path.join(repoRoot, 'AUTHORING.md'), 'utf8'))
+})
+
+/**
+ * 导出剧本源（完整版，含 hidden_truths 与 cast[].secret——这是作者视角的文件，
+ * 剥密只针对游玩视角）。导出的就是现行正式版。
+ */
+app.get('/app/scenarios/:id/export', (req, res) => {
+  const id = String(req.params.id)
+  if (!/^story-[a-z0-9][a-z0-9-]*$/.test(id)) {
+    res.status(404).json({ error: { code: 'not-found', message: '剧本不存在' } })
+    return
+  }
+  const storyPath = path.join(presetsRoot, id, 'story.json')
+  if (!existsSync(storyPath)) {
+    res.status(404).json({ error: { code: 'not-found', message: '剧本不存在' } })
+    return
+  }
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.setHeader('content-disposition', `attachment; filename="${id}.story.json"`)
+  res.send(readFileSync(storyPath, 'utf8'))
+})
+
+/** 导入剧本：校验（错误逐条返回）→ 写数据卷 → 立即编译上架。同 id 覆盖更新。 */
+app.post('/app/scenarios/import', (req, res) => {
+  const result = publishStory({ scenariosRoot, presetsRoot, entries }, req.body)
+  res.status(result.ok ? 200 : 400).json(result)
+})
 
 /**
  * 单个剧本的玩家可见信息。隐藏真相与人物暗线只属于 GM 提示词，

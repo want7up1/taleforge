@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@taleforge/scenario-compiler": "workspace:*",
+    "@taleforge/workshop": "workspace:*",
     "express": "^5.1.0",
     "ws": "^8.18.3"
   },

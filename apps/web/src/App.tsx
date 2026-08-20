@@ -182,6 +182,7 @@ export function App() {
       onResume={s => void resumeSession(s)}
       onSettings={() => setView('settings')}
       onWorkshop={() => void enterWorkshop()}
+      onRefresh={() => void refresh()}
     />
   )
 }

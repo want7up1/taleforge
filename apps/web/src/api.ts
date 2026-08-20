@@ -120,4 +120,20 @@ export const api = {
     json<{ applied: number; skipped: string[] }>(
       fetch(`/app/sessions/${sessionId}/revisions/flush`, { method: 'POST' }),
     ),
+
+  /** 导入剧本：校验失败返回逐条错误（400 也要解析正文，不走通用 json 助手） */
+  importStory: async (story: unknown) => {
+    const res = await fetch('/app/scenarios/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(story),
+    })
+    return (await res.json()) as {
+      ok: boolean
+      id?: string
+      title?: string
+      issues?: { path: string; message: string }[]
+      brief: string
+    }
+  },
 }

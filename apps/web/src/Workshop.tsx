@@ -118,6 +118,9 @@ export function Workshop({ sessionId, onExit, onReset }: Props) {
         <span className="brand">TALEFORGE</span>
         <div className="crumbs"><b>剧本工坊</b>{running && <span>构思中…</span>}</div>
         <div className="tools">
+          <a className="tool-link" href="/app/authoring-guide" title="下载创作说明书（自己写剧本用）">
+            ⤓<span className="t"> 说明书</span>
+          </a>
           <button
             onClick={() => {
               if (confirm('重开工坊会丢弃当前访谈进度（已发布的剧本不受影响），确定吗？')) onReset()
