@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   applyReport,
+  boundaryWarnings,
   effectiveActs,
   foldEvents,
   initialProgress,
@@ -177,4 +178,24 @@ test('数值定义修订校验：未知 id 拒绝、空字段拒绝、合法条�
   for (const entry of accepted) {
     assert.ok(!Object.values(entry).includes(undefined), 'accepted 里不得携带 undefined 键')
   }
+})
+
+test('边界联动提醒：只改语义不动边界要警告，动了边界或非数值目标不警告', () => {
+  const numeric = { resources: [{ id: 'stamina', label: '体力', maxStep: 25 }], attributes: [] }
+  const warn = boundaryWarnings(
+    [{ target: 'resource', id: 'stamina', guidance: '双修体力回满' }] as never,
+    numeric,
+  )
+  assert.equal(warn.length, 1)
+  assert.match(warn[0], /±25/)
+  assert.match(warn[0], /maxStep/)
+
+  const none = boundaryWarnings(
+    [
+      { target: 'resource', id: 'stamina', guidance: '回满', maxStep: 100 },
+      { target: 'world', text: 'x' },
+    ] as never,
+    numeric,
+  )
+  assert.deepEqual(none, [])
 })

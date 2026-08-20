@@ -63,10 +63,10 @@ export interface Config {
   acts: ActDef[]
   /** 出场人物名录，供修订校验与显示 */
   cast?: { id: string; name: string }[]
-  /** 机制条目名录（资源/属性），供数值定义修订的校验与显示 */
+  /** 机制条目名录（资源/属性），供数值定义修订的校验、显示与边界联动提醒 */
   numeric?: {
-    resources?: { id: string; label: string }[]
-    attributes?: { id: string; label: string }[]
+    resources?: { id: string; label: string; maxStep?: number }[]
+    attributes?: { id: string; label: string; maxStep?: number }[]
   }
 }
 
@@ -214,6 +214,7 @@ export function apply(ctx: Context, config: Config) {
       const lines = [
         accepted.length ? `已落账 ${accepted.length} 条修订，即刻生效，此后正戏必须遵守。` : '没有可落账的修订。',
         ...rejected.map(r => `第 ${r.index + 1} 条被拒绝：${r.reason}`),
+        ...boundaryWarnings(accepted, config?.numeric),
       ]
       return Promise.resolve({
         applied: accepted.length,
@@ -245,6 +246,27 @@ export function apply(ctx: Context, config: Config) {
       stateVersion: 1,
     })
   })
+}
+
+/**
+ * 边界联动提醒：修订只改了数值语义（guidance）而没动边界时，裁决仍按旧 maxStep
+ * 裁剪——实测"双修体力回满"落账后，+55 被 maxStep=25 卡成 +25，语义永远兑现不了。
+ */
+export function boundaryWarnings(
+  accepted: Revision[],
+  numeric?: Config['numeric'],
+): string[] {
+  const warnings: string[] = []
+  for (const r of accepted) {
+    if (r.target !== 'resource' && r.target !== 'attribute') continue
+    if (r.guidance === undefined) continue
+    if (r.min !== undefined || r.max !== undefined || r.maxStep !== undefined || r.floor !== undefined) continue
+    const known = (r.target === 'resource' ? numeric?.resources : numeric?.attributes)?.find(n => n.id === r.id)
+    const cap = known?.maxStep
+    warnings.push(`注意：「${r.id}」只改了语义未动边界${cap !== undefined ? `（现行单次上限 ±${cap}）` : ''}——`
+      + '若新语义要求的单次变动会超过该上限（如"回满""清零"），请立刻再发一笔修订同步调整 maxStep/min/max，否则裁决会按旧边界裁剪，新语义永远无法兑现。')
+  }
+  return warnings
 }
 
 /** 校验修订条目：不合法的整条拒绝并说明原因，合法的规范化落账。 */

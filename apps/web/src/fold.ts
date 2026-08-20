@@ -19,8 +19,12 @@ export function textOfBlocks(blocks: unknown): string {
 
 export function messageOfEvent(event: SessionEvent): ChatMessage | undefined {
   if (event.type === 'user/message') {
-    // user/message 的 data 本身就是 UserMessage
-    const text = textOfBlocks(event.data.content)
+    // user/message 的 data 本身就是 UserMessage；回合头注入块（【回合流程】）是
+    // 平台给 GM 的机械提醒，不是玩家的话，界面上剥掉
+    const blocks = Array.isArray(event.data.content)
+      ? event.data.content.filter(b => !(typeof b.text === 'string' && b.text.trimStart().startsWith('【回合流程】')))
+      : event.data.content
+    const text = textOfBlocks(blocks)
     if (text) return { role: 'user', text, seq: event.seq }
   }
   if (event.type === 'assistant/message') {

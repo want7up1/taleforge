@@ -71,10 +71,10 @@ export function compileScenario(
       config: {
         acts: story.acts,
         cast: story.cast.map(c => ({ id: c.id, name: c.name })),
-        // 数值条目名录：供场外修订（resource/attribute 目标）的校验与显示
+        // 数值条目名录：供场外修订（resource/attribute 目标）的校验、显示与边界联动提醒
         numeric: {
-          resources: story.mechanics?.resources?.map(r => ({ id: r.id, label: r.label })) ?? [],
-          attributes: story.mechanics?.attributes?.map(a => ({ id: a.id, label: a.label })) ?? [],
+          resources: story.mechanics?.resources?.map(r => ({ id: r.id, label: r.label, maxStep: r.maxStep })) ?? [],
+          attributes: story.mechanics?.attributes?.map(a => ({ id: a.id, label: a.label, maxStep: a.maxStep })) ?? [],
         },
       },
     })

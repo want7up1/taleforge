@@ -377,16 +377,39 @@ app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
   res.json({ ...result, events, ...(inflight ? { inflight } : {}) })
 }))
 
+/**
+ * 回合头机械注入：所有贴身提醒原本都挂在工具返回值上——GM 一旦整回合不调工具，
+ * 提醒通道整个断流（实测 37 回合里 6 个强场面回合完全跳过固定流程）。把固定流程
+ * 追加为玩家消息的第二个文本块，回合开头就贴在生成点旁，不再依赖工具被调用。
+ * 前端按【回合流程】前缀隐藏此块；场外消息与工坊会话不注入。
+ */
+const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress（无进展传空数组）；有机制面板则接着用相应工具结算本回合变化；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
+
+const presetCache = new Map<string, string | undefined>()
+async function presetOf(sessionId: string): Promise<string | undefined> {
+  if (presetCache.has(sessionId)) return presetCache.get(sessionId)
+  const { items } = await rpc<{ items: SessionListItem[] }>('session.list', {})
+  for (const s of items) presetCache.set(s.sessionId, s.agentPreset)
+  return presetCache.get(sessionId)
+}
+
 app.post('/app/sessions/:id/prompt', asyncRoute(async (req, res) => {
   const { text, mode } = (req.body ?? {}) as { text?: string; mode?: 'queue' | 'steer' }
   if (!text?.trim()) {
     res.status(400).json({ error: { code: 'empty-prompt', message: '内容不能为空' } })
     return
   }
+  const content: { type: string; text: string }[] = [{ type: 'text', text }]
+  if (!text.trimStart().startsWith('【场外】')) {
+    const preset = await presetOf(String(req.params.id)).catch(() => undefined)
+    if (preset?.startsWith('story-')) {
+      content.push({ type: 'text', text: `\n\n${TURN_FLOW_REMINDER}` })
+    }
+  }
   res.json(await rpc('session.prompt', {
     sessionId: req.params.id,
     mode: mode ?? 'queue',
-    content: [{ type: 'text', text }],
+    content,
   }))
 }))
 
@@ -415,7 +438,9 @@ const textOfBlocks = (blocks: unknown): string =>
     .filter((b): b is { type: string; text: string } =>
       typeof b === 'object' && b !== null
       && (b as { type?: unknown }).type === 'text'
-      && typeof (b as { text?: unknown }).text === 'string')
+      && typeof (b as { text?: unknown }).text === 'string'
+      // 回合头注入块不算玩家原话（重写重发时要还原原始输入）
+      && !(b as { text: string }).text.trimStart().startsWith('【回合流程】'))
     .map(b => b.text)
     .join('')
 
@@ -439,7 +464,11 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
     const { sessionId: child } = await rpc<{ sessionId: string }>('session.fork', { sessionId, atSeq: anchor })
     const removed = pruneSessions(protect(child))
     console.log(`[bff] 重写回合：fork@${anchor} → ${child}，清除旧线 ${removed} 个`)
-    await rpc('session.prompt', { sessionId: child, mode: 'queue', content: [{ type: 'text', text: lastUserText }] })
+    const content: { type: string; text: string }[] = [{ type: 'text', text: lastUserText }]
+    if (!lastUserText.trimStart().startsWith('【场外】')) {
+      content.push({ type: 'text', text: `\n\n${TURN_FLOW_REMINDER}` })
+    }
+    await rpc('session.prompt', { sessionId: child, mode: 'queue', content })
     res.json({ sessionId: child })
     return
   }
