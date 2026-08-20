@@ -515,10 +515,28 @@ app.get('/app/sessions', asyncRoute(async (_req, res) => {
   res.json({ items: live })
 }))
 
+/**
+ * 剧本会话开局即定名：dsh 的自动标题模型会把回合头注入块也读进摘要
+ * （实测标题变成"（开始）回合流程与序幕设定"），而手动 rename 会
+ * 明确取代自动生成（session-title 的 supersede 语义）。失败不阻塞开局。
+ */
+async function nameStorySession(sessionId: string, presetId?: string): Promise<void> {
+  if (!presetId?.startsWith('story-')) return
+  try {
+    const story = JSON.parse(
+      readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8'),
+    ) as { title?: string }
+    if (story.title) await rpc('session.rename', { sessionId, title: `《${story.title}》` })
+  } catch (err) {
+    console.log(`[bff] 开局定名失败（不影响游戏）：${String(err)}`)
+  }
+}
+
 app.post('/app/sessions', asyncRoute(async (req, res) => {
   const { agentPreset } = (req.body ?? {}) as { agentPreset?: string }
   const shielded = await protectedSessions()
   const created = await rpc<{ sessionId: string }>('session.create', agentPreset ? { agentPreset } : {})
+  await nameStorySession(created.sessionId, agentPreset)
   // 单存档：新局一旦建立，旧局连同调试残留一并清除；工坊与修改对话保留
   const keep = new Set([created.sessionId, ...shielded])
   const removed = pruneSessions(keep)
@@ -679,7 +697,7 @@ app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
  * 追加为玩家消息的第二个文本块，回合开头就贴在生成点旁，不再依赖工具被调用。
  * 前端按【回合流程】前缀隐藏此块；场外消息与工坊会话不注入。
  */
-const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress——每一回合都要调，无进展传空数组（转幕判定与逐回合结算都靠它）；有机制面板则接着用相应工具把本回合的全部变化结清；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
+const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress——每一回合都要调，只报往回合正文里已经达成的锚点（本回合才打算写的不算，下回合再报），无进展传空数组；有机制面板则接着用相应工具把本回合的全部变化结清；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
 
 const presetCache = new Map<string, string | undefined>()
 async function presetOf(sessionId: string): Promise<string | undefined> {
@@ -869,6 +887,7 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
   const { items } = await rpc<{ items: { sessionId: string; agentPreset?: string }[] }>('session.list', {})
   const preset = items.find(s => s.sessionId === sessionId)?.agentPreset
   const created = await rpc<{ sessionId: string }>('session.create', preset ? { agentPreset: preset } : {})
+  await nameStorySession(created.sessionId, preset)
   pruneSessions(protect(created.sessionId))
   console.log(`[bff] 重写开场：重开新局 ${created.sessionId}`)
   res.json({ sessionId: created.sessionId })

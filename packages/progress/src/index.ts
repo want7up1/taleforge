@@ -84,14 +84,17 @@ export function apply(ctx: Context, config: Config) {
   ctx.tools.register(defineTool({
     name: 'report_progress',
     description: '每个正戏回合的第一个动作。对照幕结构里各锚点的「完成信号」，'
-      + '上报本回合剧情中真实达成的锚点 id；一个都没有就传空数组。'
+      + '上报**已经定稿的正文里**达成的锚点 id——本工具在你动笔之前调用，'
+      + '「已达成」只能来自往回合写完的正文（通常是上一回合）；'
+      + '本回合才打算写的不报，写完了等下回合再报。一个都没有就传空数组。'
       + '返回当前幕、未完成锚点与节奏指示——以返回内容为准推进剧情。'
-      + '只认当前幕的锚点；达成标准是完成信号真实发生，不是"接近了"。',
+      + '只认当前幕的锚点；达成标准是完成信号已经落在纸面上，'
+      + '不是"接近了"，也不是"这回合会写到"——预报锚点等于把剧情赶进度，节奏是要慢慢演的。',
     parameters: {
       achieved: {
         type: 'array',
         required: true,
-        description: '本回合真实达成的锚点 id 列表，可为空数组',
+        description: '已落在往回合正文里的锚点 id 列表，可为空数组',
         items: { type: 'string' },
       },
     },
