@@ -41,6 +41,7 @@ if (s.mechanics) {
     m.attributes && `属性×${m.attributes.length}`,
     m.checks && `判定(${m.checks.die})`,
     m.inventory && `物品栏(初始×${m.inventory.initial.length})`,
+    m.progression && `经验等级(满级 ${m.progression.thresholds.length + 1}，每级 ${m.progression.pointsPerLevel} 点)`,
   ].filter(Boolean).join('、')}`)
 }
 // 品质提示（不算错误）：必需锚点缺完成信号是卡幕/跳幕的头号来源

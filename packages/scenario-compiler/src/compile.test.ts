@@ -301,3 +301,34 @@ test('工坊 preset 生成：persona 完整、挂发布插件、不带 story- �
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('progression：需同时声明 attributes、阈值必须严格递增', () => {
+  const attrs = [{ id: 'str', label: '力量', initial: 3, guidance: 'x' }]
+  const prog = { guidance: '击杀 +10', maxStep: 40, thresholds: [40, 100], pointsPerLevel: 2 }
+  assert.throws(() => storySchema.parse({ ...story, mechanics: { progression: prog } }), /attributes/)
+  assert.throws(
+    () => storySchema.parse({ ...story, mechanics: { attributes: attrs, progression: { ...prog, thresholds: [100, 40] } } }),
+    /递增/,
+  )
+  const ok = storySchema.parse({ ...story, mechanics: { attributes: attrs, progression: prog } })
+  assert.equal(ok.mechanics?.progression?.label, '经验', 'label 缺省为经验')
+})
+
+test('progression 进 persona：经验等级段、固定流程里 grant_xp 必调与【加点】先落账', () => {
+  const parsed = storySchema.parse({
+    ...story,
+    mechanics: {
+      attributes: [{ id: 'str', label: '力量', initial: 3, guidance: 'x' }],
+      progression: { label: '进化点', guidance: '吞噬晶核 +20', maxStep: 40, thresholds: [40, 100], pointsPerLevel: 2, display: 'panel' },
+    },
+  })
+  const persona = renderPersona(parsed)
+  assert.match(persona, /## 经验与等级（进化点）/)
+  assert.match(persona, /吞噬晶核 \+20/)
+  assert.match(persona, /升到 2\/3 级各需累计 40\/100，满级 3 级/)
+  assert.match(persona, /`grant_xp` 每个正戏回合必调（没有传 0）/)
+  assert.match(persona, /【加点】时第一件事先 `spend_points`/)
+  assert.match(persona, /属性主要靠玩家用属性点加点成长/)
+  // 没声明就一个字都不出现
+  assert.doesNotMatch(renderPersona(storySchema.parse(story)), /grant_xp|经验与等级/)
+})

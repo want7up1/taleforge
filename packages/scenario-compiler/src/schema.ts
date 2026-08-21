@@ -134,8 +134,28 @@ export const storySchema = z.object({
           note: z.string().optional(),
         })).default([]),
       }).optional(),
+      /**
+       * 经验与等级：GM 按 guidance 上报经验（代码裁单次上限），等级与属性点由代码按阈值表
+       * 裁定，属性点由玩家自行分配（加点随下一步行动进回合，GM 只能原样落账）。需同时声明 attributes。
+       */
+      progression: z.object({
+        /** 经验值的显示名 */
+        label: z.string().min(1).default('经验'),
+        /** 什么事件给多少经验——机械规则，给数字 */
+        guidance: z.string().min(1),
+        /** 单回合经验变动上限 */
+        maxStep: z.number().int().positive(),
+        /** 升到 2、3、…级各需累计多少经验；表长 + 1 = 最高等级 */
+        thresholds: z.array(z.number().int().positive()).min(1)
+          .refine(t => t.every((v, i) => i === 0 || v > t[i - 1]), '阈值必须严格递增'),
+        /** 每升一级发放的属性点 */
+        pointsPerLevel: z.number().int().positive(),
+        /** 显示位置：strip 顶栏（缺省）/ panel 只进卷宗 */
+        display: z.enum(['strip', 'panel']).optional(),
+      }).optional(),
     })
     .refine(m => m.resources || m.attributes || m.checks || m.inventory, '声明了 mechanics 就至少要启用一个模块')
+    .refine(m => !m.progression || m.attributes, '经验等级需要同时声明 attributes——属性点要加在属性上')
     .optional(),
   /**
    * 工艺声明——显式、无隐藏默认。modules 必填（可为空数组 = 只要底座结构保证）；

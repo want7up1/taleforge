@@ -738,6 +738,35 @@ interface ProjectionValues {
   attributes?: NumericSnapshot | null
   inventory?: { items: { name: string; qty: number }[] } | null
   progress?: { actIndex: number } | null
+  progression?: { label: string; xp: number; level: number; next: number | null; unspent: number } | null
+}
+
+/**
+ * 玩家加点行 → spend_points 参数。前端用属性显示名写【加点】行（玩家看得懂），这里按
+ * 投影里的现行属性名录（与界面同源，含改名修订）换算成 id，作为机械指令贴进回合头。
+ */
+function allocationHint(playerText: string, attributes: NumericSnapshot | null | undefined): string | undefined {
+  const line = playerText.split('\n').map(l => l.trim()).find(l => l.startsWith('【加点】'))
+  if (!line) return undefined
+  const defs = attributes?.defs ?? []
+  const allocations: { id: string; points: number }[] = []
+  const unknown: string[] = []
+  // 条目以顿号/逗号分隔，每条"显示名 +N"（显示名可含空格）；同一属性写多次合并
+  for (const part of line.slice('【加点】'.length).split(/[、,，;；]/)) {
+    const m = /^(.+?)\s*\+\s*(\d+)\s*$/.exec(part.trim())
+    if (!m) continue
+    const def = defs.find(d => d.label === m[1] || d.id === m[1])
+    if (!def) {
+      unknown.push(m[1])
+      continue
+    }
+    const points = Number(m[2])
+    const hit = allocations.find(a => a.id === def.id)
+    if (hit) hit.points += points
+    else allocations.push({ id: def.id, points })
+  }
+  return `【加点】玩家本回合分配属性点——固定流程第 2 步第一件事调 spend_points 原样落账：allocations=${JSON.stringify(allocations)}`
+    + (unknown.length ? `（无法对应属性：${unknown.join('、')}，忽略）` : '')
 }
 
 /**
@@ -760,6 +789,11 @@ function panelLines(values: ProjectionValues): string[] {
     }
     return byGroup
   }
+  const prog = values.progression
+  if (prog) {
+    lines.push(`等级：Lv.${prog.level}（${prog.label} ${prog.xp}${prog.next !== null && prog.next !== undefined ? `/${prog.next}` : '，满级'}）`
+      + (prog.unspent > 0 ? `，未分配属性点 ${prog.unspent}` : ''))
+  }
   const attrs = [...numeric(values.attributes).values()].flat()
   if (attrs.length) lines.push(`属性：${attrs.join(' ')}`)
   const groupTitle = { self: '自身', affinity: '好感', world: '队伍' } as const
@@ -775,11 +809,12 @@ function panelLines(values: ProjectionValues): string[] {
   return lines
 }
 
-/** 正戏回合头注入块：平台固定流程 + 面板快照 + 剧本贴身提醒。非剧本会话返回 undefined。 */
-async function turnHeadBlock(sessionId: string): Promise<{ type: string; text: string } | undefined> {
+/** 正戏回合头注入块：平台固定流程 + 面板快照 + 加点指令 + 剧本贴身提醒。非剧本会话返回 undefined。 */
+async function turnHeadBlock(sessionId: string, playerText: string): Promise<{ type: string; text: string } | undefined> {
   const preset = await presetOf(sessionId).catch(() => undefined)
   if (!preset?.startsWith('story-')) return undefined
   let panel = ''
+  let alloc = ''
   let actIndex: number | undefined
   try {
     const history = await rpc<{ projections?: { values: ProjectionValues } }>(
@@ -788,6 +823,9 @@ async function turnHeadBlock(sessionId: string): Promise<{ type: string; text: s
     )
     const values = history.projections?.values ?? {}
     actIndex = values.progress?.actIndex
+    // 只有开了经验等级的剧本才有 spend_points；没开的剧本即便玩家手打【加点】也不注入
+    const hint = values.progression ? allocationHint(playerText, values.attributes) : undefined
+    if (hint) alloc = `\n${hint}`
     const lines = panelLines(values)
     if (lines.length) {
       panel = `\n【当前面板】${lines.join('；')}。`
@@ -800,7 +838,7 @@ async function turnHeadBlock(sessionId: string): Promise<{ type: string; text: s
   const reminder = reminderOf(preset, actIndex)
   return {
     type: 'text',
-    text: `\n\n${TURN_FLOW_REMINDER}${panel}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
+    text: `\n\n${TURN_FLOW_REMINDER}${alloc}${panel}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
   }
 }
 
@@ -812,7 +850,7 @@ app.post('/app/sessions/:id/prompt', asyncRoute(async (req, res) => {
   }
   const content: { type: string; text: string }[] = [{ type: 'text', text }]
   if (!text.trimStart().startsWith('【场外】')) {
-    const block = await turnHeadBlock(String(req.params.id))
+    const block = await turnHeadBlock(String(req.params.id), text)
     if (block) content.push(block)
   }
   res.json(await rpc('session.prompt', {
@@ -875,7 +913,7 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
     console.log(`[bff] 重写回合：fork@${anchor} → ${child}，清除旧线 ${removed} 个`)
     const content: { type: string; text: string }[] = [{ type: 'text', text: lastUserText }]
     if (!lastUserText.trimStart().startsWith('【场外】')) {
-      const block = await turnHeadBlock(String(sessionId))
+      const block = await turnHeadBlock(String(sessionId), lastUserText)
       if (block) content.push(block)
     }
     await rpc('session.prompt', { sessionId: child, mode: 'queue', content })

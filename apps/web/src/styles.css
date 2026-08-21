@@ -181,6 +181,8 @@ body::after {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.7;
+  /* 行动后面跟着的【加点】行另起一行显示 */
+  white-space: pre-line;
 }
 
 .gm-block {
@@ -1137,3 +1139,57 @@ button.link.danger { color: var(--danger); margin-top: 16px; display: block; }
   .save-row-wrap { flex-direction: column; }
   .save-actions { flex-direction: row; }
 }
+
+/* ---- 经验与等级 / 加点 ---- */
+
+.level-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: inherit;
+  background: none;
+  border: 1px solid transparent;
+  padding: 2px 6px;
+  color: inherit;
+  cursor: pointer;
+}
+.level-strip:hover { border-color: var(--border-strong); }
+.level-strip.attention { border-color: var(--amber); }
+.level-badge { font-family: var(--pixel); font-size: 8px; color: #1a1206; background: var(--amber); padding: 1px 4px; }
+
+.level-row { display: flex; align-items: baseline; gap: 10px; }
+.level-row b { font-family: var(--pixel); font-size: 11px; color: var(--phosphor); }
+.level-track { height: 8px; border: 1px solid var(--border-strong); background: var(--input); margin: 6px 0; }
+.level-track i { display: block; height: 100%; background: var(--phosphor-dim); }
+.drawer .pts { color: var(--amber); font-family: var(--mono); }
+
+.attr-ctl { display: inline-flex; align-items: center; gap: 6px; }
+.attr-pending { font-style: normal; color: var(--amber); font-family: var(--mono); font-size: 12px; }
+.attr-btn {
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  padding: 0;
+  font-size: 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--fg);
+  cursor: pointer;
+}
+.attr-btn:disabled { opacity: 0.35; cursor: default; }
+.attr-btn:not(:disabled):hover { border-color: var(--phosphor); color: var(--phosphor); }
+
+.alloc-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--amber);
+  border: 1px dashed var(--amber);
+  padding: 8px 12px;
+}
+.alloc-actions { display: flex; gap: 6px; }
+.settlement-row.levelup .settlement-label { color: var(--amber); font-weight: 600; }

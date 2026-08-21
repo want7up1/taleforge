@@ -11,10 +11,14 @@ import {
   effectiveNumericDefs,
   foldApplied,
   foldInventory,
+  foldProgression,
   initialInventory,
   isAttributesResult,
   isInventoryResult,
   isMechanicsResult,
+  isPointsResult,
+  isXpResult,
+  progressionView,
   type AppliedChange,
   type AppliedInventoryChange,
   type NumericDefRevision,
@@ -126,6 +130,20 @@ if (story.mechanics?.inventory) {
   )
   check('items', Object.entries(state).map(([id, v]) => ({ id, qty: v.qty })),
     (servedInv?.items ?? []).map(i => ({ id: i.id, qty: i.qty })))
+}
+if (story.mechanics?.progression) {
+  console.log('progression:')
+  const servedProg = served.progression as { xp: number; level: number; unspent: number } | undefined
+  const metas: unknown[] = []
+  for (const e of events) {
+    if (e.type !== 'tool/result') continue
+    const meta = (e.data as { meta?: unknown }).meta
+    if (isXpResult(meta) || isPointsResult(meta)) metas.push(meta)
+  }
+  const view = progressionView(story.mechanics.progression, foldProgression(metas))
+  check('xp', view.xp, servedProg?.xp)
+  check('level', view.level, servedProg?.level)
+  check('unspent', view.unspent, servedProg?.unspent)
 }
 
 console.log(failures === 0 ? '\n折叠回归通过：本地重放与服务端投影一致' : `\n${failures} 项不一致`)

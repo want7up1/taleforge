@@ -126,6 +126,32 @@ export interface InventoryChange {
   reason?: string
 }
 
+/** progression projection 的载荷：等级、经验、未分配属性点 */
+export interface ProgressionSnapshot {
+  label: string
+  xp: number
+  level: number
+  maxLevel: number
+  /** 当前等级的起点阈值 */
+  prev: number
+  /** 下一级阈值；满级为 null */
+  next: number | null
+  unspent: number
+  pointsPerLevel: number
+  display?: 'strip' | 'panel'
+}
+
+/** tool/result.meta 里的一次经验结算（含升级发点） */
+export interface XpMeta {
+  applied: number
+  before: number
+  after: number
+  reason: string
+  levelBefore: number
+  levelAfter: number
+  pointsGranted: number
+}
+
 /** tool/result.meta 里的一次判定裁决 */
 export interface CheckMeta {
   die: string
@@ -222,6 +248,7 @@ export interface ProjectionsBlock {
     attributes?: AttributesSnapshot | null
     inventory?: InventorySnapshot | null
     progress?: ProgressSnapshot | null
+    progression?: ProgressionSnapshot | null
     sessionStats?: SessionStats
   }
 }

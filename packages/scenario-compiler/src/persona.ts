@@ -147,7 +147,18 @@ ${mech.resources.map(r => `- \`${r.id}\` **${r.label}**（${r.min}–${r.max}，
 
 ${mech.attributes.map(a => `- \`${a.id}\` **${a.label}**（${a.min}–${a.max}）\n  ${a.guidance}`).join('\n')}
 
-属性变动稀少：只有剧情事件明确落进某条属性的说明里，才在固定流程同一步调用 \`adjust_attributes\`（规则同资源）。判定会自动引用属性作修正。`)
+属性变动稀少：只有剧情事件明确落进某条属性的说明里，才在固定流程同一步调用 \`adjust_attributes\`（规则同资源）。判定会自动引用属性作修正。${mech.progression ? '本作开启了经验等级：属性主要靠玩家用属性点加点成长，`adjust_attributes` 只留给上面说明里明确写出的剧情奖励。' : ''}`)
+  }
+  if (mech?.progression) {
+    const p = mech.progression
+    const maxLevel = p.thresholds.length + 1
+    mechSections.push(`## 经验与等级（${p.label}）
+
+${p.guidance}
+
+- 回合固定流程中用 \`grant_xp\` 上报本回合获得的${p.label}（每个正戏回合必调，没有就传 0），单次最多 ${p.maxStep}。等级由系统按阈值裁定（升到 ${p.thresholds.map((_, i) => i + 2).join('/')} 级各需累计 ${p.thresholds.join('/')}，满级 ${maxLevel} 级），升级时系统发放 ${p.pointsPerLevel} 点属性点，**由玩家自行分配，你不替玩家加点**。
+- 系统宣布升级的回合，把升级写成剧情里可感的瞬间（力量灌进身体、感官变敏锐、旁人的反应……）；正文不出现等级与${p.label}数字。
+- 玩家消息带【加点】块时，固定流程第 2 步第一件事是调 \`spend_points\`，按玩家写的分配原样落账（id 用属性表里的 id；不增不减不改动），随后在正文里用一两句写出这份成长。`)
   }
   if (mech?.checks) {
     mechSections.push(`## 判定（骰型 ${mech.checks.die}）
@@ -182,7 +193,7 @@ ${mechSections.join('\n\n')}`
 
 1. **第一个动作永远是调用 \`report_progress\`**：对照幕结构里各锚点的完成信号，上报本回合剧情中真实达成的锚点 id；一个都没有就传空数组 \`{"achieved": []}\`。达成标准是完成信号在剧情中**真实发生**，不是"接近了"——虚报会被记录并锁死剧情走向。${mech
     ? `
-2. **接着结算机制**（规则见上方机制面板）：${mech.resources ? '`adjust_resources` 每个正戏回合必调（没变化传空数组）；' : ''}${mech.checks ? '该掷的判定在这一步掷；' : ''}${mech.attributes ? '属性变动在这一步记；' : ''}${mech.inventory ? '物品变动在这一步入账；' : ''}本回合不涉及的模块不调。
+2. **接着结算机制**（规则见上方机制面板）：${mech.progression ? '玩家消息带【加点】时第一件事先 `spend_points` 原样落账；' : ''}${mech.resources ? '`adjust_resources` 每个正戏回合必调（没变化传空数组）；' : ''}${mech.progression ? '`grant_xp` 每个正戏回合必调（没有传 0）；' : ''}${mech.checks ? '该掷的判定在这一步掷；' : ''}${mech.attributes ? '属性变动在这一步记；' : ''}${mech.inventory ? '物品变动在这一步入账；' : ''}本回合不涉及的模块不调。
 3. 然后才写正文与行动块。`
     : `
 2. 然后才写正文与行动块。`}

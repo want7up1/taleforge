@@ -7,6 +7,7 @@ import type {
   InventoryChange,
   MechanicsChange,
   SessionEvent,
+  XpMeta,
 } from './types.ts'
 
 export function textOfBlocks(blocks: unknown): string {
@@ -38,6 +39,7 @@ export interface TurnDigest {
   settlement: MechanicsChange[]
   inventory: InventoryChange[]
   check?: CheckMeta
+  xp?: XpMeta
 }
 
 /** 汇总最近一个回合的机制事件（结算/物品/判定），供刷新页面后仍能看到本回合变化。 */
@@ -62,6 +64,7 @@ export function lastTurnDigest(entries: HistoryEntry[]): TurnDigest {
       digest.inventory.push(...(meta.changes as InventoryChange[] ?? []))
     }
     if (meta.kind === 'mechanics/check') digest.check = meta as unknown as CheckMeta
+    if (meta.kind === 'mechanics/xp') digest.xp = meta as unknown as XpMeta
   }
   return digest
 }

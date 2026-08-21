@@ -1,10 +1,11 @@
 /** 卷宗抽屉：剧本静态信息 + 幕进度 + 会话统计。数据全部来自投影与剧本详情。 */
 import { useEffect } from 'react'
-import { MeterPanel } from './Meters.tsx'
+import { levelPct, MeterPanel } from './Meters.tsx'
 import type {
   AttributesSnapshot,
   InventorySnapshot,
   MechanicsSnapshot,
+  ProgressionSnapshot,
   ProgressSnapshot,
   SessionStats,
   StoryDetail,
@@ -17,6 +18,11 @@ interface Props {
   attributes?: AttributesSnapshot
   inventory?: InventorySnapshot
   progress?: ProgressSnapshot
+  /** 经验等级；有未分配点时属性表出现加点按钮 */
+  progression?: ProgressionSnapshot
+  /** 待分配的加点（属性 id → 点数），随下一步行动发送 */
+  alloc?: Record<string, number>
+  onAlloc?: (id: string, delta: number) => void
   /** 防剧透：已在正文出场的人物 id 集合 */
   knownCast?: Set<string>
   focus?: string
@@ -26,7 +32,10 @@ interface Props {
   flushNote?: string
 }
 
-export function Dossier({ story, stats, mechanics, attributes, inventory, progress, knownCast, focus, onClose, onFlushRevisions, flushNote }: Props) {
+export function Dossier({ story, stats, mechanics, attributes, inventory, progress, progression, alloc, onAlloc, knownCast, focus, onClose, onFlushRevisions, flushNote }: Props) {
+  const pendingTotal = Object.values(alloc ?? {}).reduce((a, b) => a + b, 0)
+  // 待分配是本地攒的，投影里的未分配数可能已被上一回合的落账扣过：显示不出现负数
+  const remaining = Math.max(0, (progression?.unspent ?? 0) - pendingTotal)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -55,16 +64,49 @@ export function Dossier({ story, stats, mechanics, attributes, inventory, progre
 
         {mechanics && <MeterPanel snapshot={mechanics} knownCast={knownCast} />}
 
+        {progression && (
+          <section>
+            <h3>等级</h3>
+            <div className="level-row">
+              <b>Lv.{progression.level}</b>
+              <span className="muted">
+                {progression.label} {progression.xp}{progression.next !== null ? ` / ${progression.next}` : '（满级）'}
+              </span>
+            </div>
+            <div className="level-track"><i style={{ width: `${levelPct(progression)}%` }} /></div>
+            {(progression.unspent > 0 || pendingTotal > 0) && (
+              <p className="muted">
+                未分配属性点 <b className="pts">{remaining}</b> 点
+                {pendingTotal > 0 ? `——已选 ${pendingTotal} 点，随下一步行动生效` : '——在下方属性表加点'}
+              </p>
+            )}
+          </section>
+        )}
+
         {attributes && attributes.defs.length > 0 && (
           <section>
             <h3>属性</h3>
             <div className="attr-table">
-              {attributes.defs.map(d => (
-                <div key={d.id} className="attr-row">
-                  <span>{d.label}</span>
-                  <b>{attributes.state[d.id]?.value ?? d.initial}</b>
-                </div>
-              ))}
+              {attributes.defs.map((d) => {
+                const value = attributes.state[d.id]?.value ?? d.initial
+                const pending = alloc?.[d.id] ?? 0
+                return (
+                  <div key={d.id} className="attr-row">
+                    <span>{d.label}</span>
+                    <span className="attr-ctl">
+                      {pending > 0 && <i className="attr-pending">+{pending}</i>}
+                      <b>{value}</b>
+                      {/* 加点：只攒待分配，随下一步行动进回合由 spend_points 落账 */}
+                      {progression && onAlloc && (progression.unspent > 0 || pending > 0) && (
+                        <>
+                          <button className="attr-btn" disabled={pending === 0} onClick={() => onAlloc(d.id, -1)} title="撤回一点">−</button>
+                          <button className="attr-btn" disabled={remaining <= 0 || value + pending >= d.max} onClick={() => onAlloc(d.id, 1)} title="加一点">＋</button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </section>
         )}

@@ -8,7 +8,7 @@ import { Brand } from './Brand.tsx'
 import { Dossier } from './Dossier.tsx'
 import { foldHistory, lastSeqOf, lastTurnDigest, mergeMessages, messageOfEvent, planResume } from './fold.ts'
 import { GmChat, type GmChatItem } from './GmChat.tsx'
-import { MeterStrip, placementOf } from './Meters.tsx'
+import { LevelStrip, MeterStrip, placementOf } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { openSessionStream } from './stream.ts'
@@ -23,9 +23,11 @@ import type {
   MechanicsSnapshot,
   ModelCatalog,
   MuxFrame,
+  ProgressionSnapshot,
   ProgressSnapshot,
   SessionStats,
   StoryDetail,
+  XpMeta,
 } from './types.ts'
 
 interface Props {
@@ -46,6 +48,8 @@ const TOOL_PHASE: Record<string, string> = {
   adjust_inventory: '清点物品',
   roll_check: '掷骰判定',
   revise_setting: '修订设定',
+  grant_xp: '结算经验',
+  spend_points: '分配属性点',
 }
 const OFFSTAGE_PREFIX = '【场外】'
 /** GM 的场外回复以（场外）开头——底座场外协议规定的固定格式 */
@@ -65,6 +69,11 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
   const [attributes, setAttributes] = useState<AttributesSnapshot>()
   const [inventory, setInventory] = useState<InventorySnapshot>()
   const [progress, setProgress] = useState<ProgressSnapshot>()
+  const [progression, setProgression] = useState<ProgressionSnapshot>()
+  /** 本回合的经验结算（含升级发点） */
+  const [xpChange, setXpChange] = useState<XpMeta>()
+  /** 待分配的加点（属性 id → 点数）：在卷宗里攒，随下一步行动发送，由 GM 经 spend_points 落账 */
+  const [alloc, setAlloc] = useState<Record<string, number>>({})
   /** 本回合的结算明细（资源+属性），跟着正文一起显示 */
   const [settlement, setSettlement] = useState<MechanicsChange[]>([])
   /** 本回合的物品变动与判定 */
@@ -175,6 +184,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
       if (values?.attributes) setAttributes(values.attributes)
       if (values?.inventory) setInventory(values.inventory)
       if (values?.progress) setProgress(values.progress)
+      if (values?.progression) setProgression(values.progression)
       if (values?.sessionStats) setStats(values.sessionStats)
       // 本回合结算卡：拉取窗口内已开了新回合的话，帧处理器正在累积，不用快照盖掉
       if (!plan.startedMeanwhile) {
@@ -182,6 +192,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
         setSettlement(digest.settlement)
         setInvChanges(digest.inventory)
         setCheck(digest.check)
+        setXpChange(digest.xp)
       }
       // 阅读位置：首次打开归顶；重拉发现了实时流没见过的新回合（离开期间开始或结束的）也归顶
       const lastStart = lastSeqOf(events, 'turn/start')
@@ -246,6 +257,10 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           setProgress(frame.value as ProgressSnapshot)
           return
         }
+        if (frame.type === 'session/projection' && frame.key === 'progression') {
+          setProgression(frame.value as ProgressionSnapshot)
+          return
+        }
         if (frame.type !== 'session/event' || !frame.event) return
         const event = frame.event
 
@@ -267,6 +282,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
             setInvChanges(prev => [...prev, ...(meta.changes as InventoryChange[])])
           }
           if (meta.kind === 'mechanics/check') setCheck(meta as unknown as CheckMeta)
+          if (meta.kind === 'mechanics/xp') setXpChange(meta as unknown as XpMeta)
           return
         }
 
@@ -280,6 +296,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           setSettlement([])
           setInvChanges([])
           setCheck(undefined)
+          setXpChange(undefined)
           sawText.current = false
           setEmptyTurn(false)
           // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
@@ -386,13 +403,32 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     if (headings.length) setScene(headings[headings.length - 1][1])
   }, [streaming, latest])
 
+  /** 待分配的加点写成一行【加点】跟在行动后面（用属性显示名，BFF 换算成 id 提示 GM 落账） */
+  const allocLine = useMemo(() => {
+    const parts = Object.entries(alloc)
+      .filter(([, n]) => n > 0)
+      .map(([id, n]) => `${attributes?.defs.find(d => d.id === id)?.label ?? id} +${n}`)
+    return parts.length ? `【加点】${parts.join('、')}` : ''
+  }, [alloc, attributes])
+
+  const onAlloc = useCallback((id: string, delta: number) => {
+    setAlloc((prev) => {
+      const n = Math.max(0, (prev[id] ?? 0) + delta)
+      const next = { ...prev }
+      if (n > 0) next[id] = n
+      else delete next[id]
+      return next
+    })
+  }, [])
+
   const send = async (text: string) => {
     if (!text.trim()) return
     setError(undefined)
     setFreeMode(false)
     setInput('')
     try {
-      await api.prompt(sessionId, text)
+      await api.prompt(sessionId, allocLine ? `${text.trim()}\n${allocLine}` : text)
+      if (allocLine) setAlloc({})
     } catch (err) {
       setError(String(err))
     }
@@ -474,6 +510,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           {turnNo > 0 && <span>第 {turnNo} 回合</span>}
           {scene && <span>{scene}</span>}
         </div>
+        {progression && progression.display !== 'panel' && (
+          <LevelStrip progression={progression} onClick={() => setDossier(true)} />
+        )}
         {mechanics && <MeterStrip snapshot={mechanics} knownCast={knownCast} />}
         <div className="tools">
           <button onClick={() => setModelOpen(true)} title="切换本局模型">
@@ -539,9 +578,28 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
             </div>
           )}
 
-          {(settlement.length > 0 || invChanges.length > 0) && !running && (
+          {(settlement.length > 0 || invChanges.length > 0 || (xpChange && xpChange.applied !== 0)) && !running && (
             <div className="settlement">
               <span className="settlement-title">本回合结算</span>
+              {xpChange && xpChange.applied !== 0 && (
+                <div className="settlement-row">
+                  <b className={xpChange.applied > 0 ? 'up' : 'down'}>
+                    {xpChange.applied > 0 ? `+${xpChange.applied}` : xpChange.applied}
+                  </b>
+                  <span className="settlement-label">{progression?.label ?? '经验'}</span>
+                  <span className="settlement-after">
+                    → {xpChange.after}{progression?.next != null ? `/${progression.next}` : ''}
+                  </span>
+                  <span className="settlement-reason">{xpChange.reason}</span>
+                </div>
+              )}
+              {xpChange && xpChange.pointsGranted > 0 && (
+                <div className="settlement-row levelup">
+                  <b className="up">▲</b>
+                  <span className="settlement-label">升级！Lv.{xpChange.levelBefore} → Lv.{xpChange.levelAfter}</span>
+                  <span className="settlement-after">获得 {xpChange.pointsGranted} 点属性点</span>
+                </div>
+              )}
               {settlement.filter((c) => {
                 // hidden 选位与未出场人物的数值只记账不展示（GM 侧照常可见）
                 const def = mechanics?.defs.find(d => d.id === c.id)
@@ -587,6 +645,19 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
                 <span className="key">↻</span>
                 <span className="label">重新生成这一回合</span>
               </button>
+            </div>
+          )}
+
+          {/* 属性点：未分配提示 / 待分配预览，加点本身在卷宗里做，随下一步行动落账 */}
+          {idle && !ended && progression && (progression.unspent > 0 || allocLine) && (
+            <div className="alloc-box">
+              {allocLine
+                ? <span>◆ 待分配：{allocLine.replace('【加点】', '')}（随下一步行动生效）</span>
+                : <span>◆ 你有 {progression.unspent} 点属性点未分配</span>}
+              <span className="alloc-actions">
+                <button className="ghost" onClick={() => setDossier(true)}>{allocLine ? '调整' : '去加点'}</button>
+                {allocLine && <button className="ghost" onClick={() => setAlloc({})}>清除</button>}
+              </span>
             </div>
           )}
 
@@ -696,6 +767,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           attributes={attributes}
           inventory={inventory}
           progress={progress}
+          progression={progression}
+          alloc={alloc}
+          onAlloc={onAlloc}
           knownCast={knownCast}
           focus={focusCharacter}
           onFlushRevisions={() => void flushRevisions()}

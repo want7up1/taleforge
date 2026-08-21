@@ -17,11 +17,27 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { DIE_RANGE, renderCheck, resolveCheck, rollDie } from './check.ts'
 import { applyInventory, foldInventory, initialInventory } from './inventory.ts'
+import {
+  applyAllocations,
+  applyXp,
+  foldProgression,
+  initialProgression,
+  parseAllocationRequest,
+  progressionView,
+  reduceProgression,
+  renderSpend,
+  renderXp,
+  type AllocationOutcome,
+  type PointAllocation,
+  type ProgressionView,
+} from './progression.ts'
 import { applyChanges, effectiveNumericDefs, foldApplied, initialState } from './resources.ts'
 import {
   isAttributesResult,
   isInventoryResult,
   isMechanicsResult,
+  isPointsResult,
+  isXpResult,
   type AppliedChange,
   type AppliedInventoryChange,
   type AttributeDef,
@@ -32,12 +48,16 @@ import {
   type InventoryState,
   type NumericDef,
   type NumericDefRevision,
+  type ProgressionConfig,
+  type ProgressionState,
   type ResourceDef,
   type ResourceState,
+  type XpResult,
 } from './types.ts'
 
 export * from './check.ts'
 export * from './inventory.ts'
+export * from './progression.ts'
 export * from './resources.ts'
 export * from './types.ts'
 
@@ -88,6 +108,18 @@ const inventorySchema = z.object({
   })),
 })
 
+const progressionSchema = z.object({
+  label: z.string(),
+  xp: z.number(),
+  level: z.number(),
+  maxLevel: z.number(),
+  prev: z.number(),
+  next: z.number().nullable(),
+  unspent: z.number(),
+  pointsPerLevel: z.number(),
+  display: z.enum(['strip', 'panel']).optional(),
+})
+
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
     /** 玩家可见的资源快照 */
@@ -96,6 +128,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
     attributes: { defs: Omit<AttributeDef, 'guidance'>[]; state: ResourceState } | null
     /** 物品栏快照 */
     inventory: { items: { id: string; name: string; qty: number; note?: string }[] } | null
+    /** 经验与等级快照：等级、经验、未分配属性点 */
+    progression: ProgressionView | null
   }
 }
 
@@ -104,6 +138,8 @@ export interface Config {
   attributes?: AttributeDef[]
   checks?: CheckConfig
   inventory?: InventoryConfig
+  /** 经验与等级（需同时声明 attributes：属性点要加在属性上） */
+  progression?: ProgressionConfig
   /** 侧栏分组标题自定义（strip/panel/hidden 的选位在各资源的 display 字段上） */
   groups?: GroupTitles
 }
@@ -118,6 +154,7 @@ export function apply(ctx: Context, config: Config) {
   const attributes = config?.attributes ?? []
   const checks = config?.checks
   const inventory = config?.inventory
+  const progression = config?.progression
 
   if (resources.length) registerNumericTool(ctx, {
     tool: 'adjust_resources',
@@ -280,6 +317,162 @@ export function apply(ctx: Context, config: Config) {
     }))
   }
 
+  if (progression) {
+    const xpLabel = progression.label
+    const changeSchema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', required: true },
+        delta: { type: 'integer', required: true },
+        reason: { type: 'string', required: true },
+        applied: { type: 'integer', required: true },
+        before: { type: 'integer', required: true },
+        after: { type: 'integer', required: true },
+        clamped: { type: 'boolean', required: true },
+      },
+    } as const
+
+    ctx.tools.register(defineTool({
+      name: 'grant_xp',
+      description: `上报本回合的${xpLabel}变化——每个正戏回合必调，没有变化传 0。`
+        + `给多少按 persona 里的规则给数字，系统裁单次上限 ±${progression.maxStep}；`
+        + '等级由系统按阈值裁定，升级时系统发放属性点并交给玩家自行分配——你不替玩家加点。',
+      parameters: {
+        amount: { type: 'integer', required: true, description: `本回合获得（负数为失去）的${xpLabel}，没有传 0` },
+        reason: { type: 'string', required: true, description: '一句话原因，玩家可见' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            delta: { type: 'integer', required: true },
+            applied: { type: 'integer', required: true },
+            before: { type: 'integer', required: true },
+            after: { type: 'integer', required: true },
+            clamped: { type: 'boolean', required: true },
+            reason: { type: 'string', required: true },
+            levelBefore: { type: 'integer', required: true },
+            levelAfter: { type: 'integer', required: true },
+            pointsGranted: { type: 'integer', required: true },
+            unspent: { type: 'integer', required: true },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: renderXp({ kind: 'mechanics/xp', ...(value as Omit<XpResult, 'kind'> & { unspent: number }) }, progression),
+        }],
+        presentationMeta: (_args, value) => ({ kind: 'mechanics/xp', ...(value as object) }),
+      },
+      execute(args, exec) {
+        if (!exec.agent) throw new Error('grant_xp 需要一个归属会话')
+        const state = readProgression(exec.agent.session.events)
+        const { state: next, result } = applyXp(state, progression, Number(args.amount), String(args.reason ?? ''))
+        const { kind: _kind, ...rest } = result
+        return Promise.resolve({ ...rest, unspent: next.granted - next.spent })
+      },
+      presentCall: () => ({ card: 'generic', title: `结算${xpLabel}`, kind: 'other' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'spend_points',
+      description: '【仅当玩家消息里带【加点】块时调用】把玩家未分配的属性点按其写明的分配加到属性上——'
+        + '原样落账，不增不减不改动；id 用属性表里的属性 id。系统以玩家消息里的加点请求为准落账'
+        + '（你传的分配与之不符时以玩家为准），并校验未分配点数与属性上限，超了整条拒绝并说明。',
+      parameters: {
+        allocations: {
+          type: 'array',
+          required: true,
+          description: '玩家的分配',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', required: true, description: '属性 id' },
+              points: { type: 'integer', required: true, description: '加几点' },
+            },
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            changes: { type: 'array', required: true, items: changeSchema },
+            spent: { type: 'integer', required: true },
+            unspent: { type: 'integer', required: true },
+            rejected: {
+              type: 'array',
+              required: true,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string', required: true },
+                  points: { type: 'integer', required: true },
+                  reason: { type: 'string', required: true },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: renderSpend(
+            value as AllocationOutcome & { unspent: number },
+            id => attributes.find(a => a.id === id)?.label ?? id,
+          ),
+        }],
+        // 复用属性 meta 形状：属性投影照常折进去；points 账供经验投影扣池子
+        presentationMeta: (_args, value) => ({
+          kind: 'mechanics/attributes',
+          changes: value.changes,
+          points: { spent: value.spent },
+        }),
+      },
+      execute(args, exec) {
+        if (!exec.agent) throw new Error('spend_points 需要一个归属会话')
+        const events = exec.agent.session.events
+        const defs = effectiveNumericDefs(attributes, collectNumericRevisions(events), 'attribute')
+        const current = readNumeric(defs, events, isAttributesResult)
+        const prog = readProgression(events)
+        const unspent = prog.granted - prog.spent
+        const proposed = (Array.isArray(args.allocations) ? args.allocations : []) as PointAllocation[]
+        // 代码权威：属性点只能由玩家分配。以玩家消息里的加点请求为准，GM 传的只作对照
+        const request = lastPlayerAllocationRequest(events)
+        if (!request) {
+          return Promise.resolve({
+            changes: [],
+            spent: 0,
+            unspent,
+            rejected: proposed.map(a => ({
+              id: String(a?.id ?? ''),
+              points: Number.isFinite(Number(a?.points)) ? Math.trunc(Number(a?.points)) : 0,
+              reason: '本回合玩家消息里没有【加点】请求——属性点只能由玩家分配，不能替玩家加',
+            })),
+          })
+        }
+        const outcome = applyAllocations(current, defs, unspent, request)
+        const extra = proposed
+          .filter(a => !request.some(r => r.id === a?.id))
+          .map(a => ({
+            id: String(a?.id ?? ''),
+            points: Number.isFinite(Number(a?.points)) ? Math.trunc(Number(a?.points)) : 0,
+            reason: '玩家未请求给该属性加点，已忽略（以玩家请求为准）',
+          }))
+        return Promise.resolve({
+          changes: outcome.changes,
+          spent: outcome.spent,
+          unspent: unspent - outcome.spent,
+          rejected: [...outcome.rejected, ...extra],
+        })
+      },
+      presentCall: () => ({ card: 'generic', title: '分配属性点', kind: 'other' }),
+    }))
+  }
+
   ctx.inject(['sessionProjections'], (projectionCtx: Context) => {
     if (resources.length) {
       projectionCtx.sessionProjections.register({
@@ -328,6 +521,18 @@ export function apply(ctx: Context, config: Config) {
         view: (state: InventoryState) => ({
           items: Object.entries(state).map(([id, v]) => ({ id, ...v })),
         }),
+        stateVersion: 1,
+      })
+    }
+    if (progression) {
+      projectionCtx.sessionProjections.register({
+        key: 'progression',
+        schema: progressionSchema,
+        init: (): ProgressionState => initialProgression(),
+        // reduceProgression 对不认识的 meta 原样返回同一引用
+        apply: (state: ProgressionState, event: { type: string; data: unknown }) =>
+          reduceProgression(state, event.type === 'tool/result' ? (event.data as { meta?: unknown }).meta : undefined),
+        view: (state: ProgressionState) => progressionView(progression, state),
         stateVersion: 1,
       })
     }
@@ -496,6 +701,29 @@ function readNumeric(
     if (meta) batches.push(meta.changes)
   }
   return foldApplied(defs, batches)
+}
+
+/** 最近一条玩家消息里的加点请求（BFF 回合头注入块携带的 allocations=[…]）；没有即玩家本回合没要求加点。 */
+function lastPlayerAllocationRequest(events: SessionEvents): PointAllocation[] | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event.type !== 'user/message') continue
+    const content = (event.data as { content?: { text?: string }[] }).content
+    const text = Array.isArray(content) ? content.map(b => (typeof b?.text === 'string' ? b.text : '')).join('\n') : ''
+    return parseAllocationRequest(text)
+  }
+  return undefined
+}
+
+/** 从会话事件里读出经验/等级/点数账（经验 meta + 加点 meta 按序折叠）。 */
+function readProgression(events: SessionEvents): ProgressionState {
+  const metas: unknown[] = []
+  for (const event of events) {
+    if (event.type !== 'tool/result') continue
+    const meta = (event.data as { meta?: unknown }).meta
+    if (isXpResult(meta) || isPointsResult(meta)) metas.push(meta)
+  }
+  return foldProgression(metas)
 }
 
 function readInventory(config: InventoryConfig, events: SessionEvents): InventoryState {

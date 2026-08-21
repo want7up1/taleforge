@@ -45,7 +45,7 @@
 
 ### mechanics（机制货架，四件套按需选调）
 
-机制段有四个模块，**声明哪个游戏里就有哪个**，各自独立可选；全部省略即纯叙事。
+机制段有五个模块，**声明哪个游戏里就有哪个**，各自独立可选（progression 依赖 attributes）；全部省略即纯叙事。
 
 **resources（资源条）**——每条 `{id, label, group, min, max, initial, floor?, maxStep, guidance}`：
 
@@ -61,6 +61,8 @@
 **checks（判定/骰子）**——`{die?, guidance}`（骰型默认 `d20`，可选 `d100`/`2d6`）：启用后，成败不确定的行动由代码掷骰裁决，GM 无权翻案（d20 天然 20/1 为大成功/大失败）。`guidance` 必须写成机械规则：**什么类型的行动必须掷**（列类型，别写「关键时刻」）+ **难度分几档、各是多少**（如「普通 12 / 困难 15 / 极难 18」）。
 
 **inventory（物品栏）**——`{guidance, initial?}`：物品一律 id 引用、纯 upsert。`guidance` 写清**什么算需要入账的物品、什么不算**（例：武器弹药药品入账，一次性杂物不入），以及**入账粒度**——成批物资按种类分条给数量，不打包成一条「物资」；`initial` 是开局物品 `[{id, name, qty?, note?}]`。平台每回合会把物品栏与全部数值的即时快照贴到 GM 生成点旁，正文账实相符靠这份快照兜底。
+
+**progression（经验与等级）**——`{label?, guidance, maxStep, thresholds, pointsPerLevel, display?}`，需同时声明 attributes：GM 按 `guidance` 上报经验（同资源条，代码裁单次上限 `maxStep`）；`thresholds` 是升到 2、3、…级各需累计的经验，严格递增，表长 + 1 为满级（经验封顶在最后一档）；每升一级由代码发放 `pointsPerLevel` 点属性点，**玩家自己在卷宗里加到属性上**（随下一步行动落账，GM 无权代为分配），属性上限沿用 `attributes[].max`。`guidance` 同样只写机械规则：什么事件给多少（击杀 +10～30、达成锚点 +50、纯对话 0），以及升级在剧情里怎么体现。开启后属性主要靠加点成长，`adjust_attributes` 只留给属性 guidance 明确写出的剧情奖励；想要"升级回满体力"这类联动，写进对应资源的 guidance。`display`：`strip` 顶栏常驻（缺省）/ `panel` 只进卷宗。
 
 **中途修改**：游戏进行中，玩家可在场外让 GM 修订资源与属性的语义和边界（改 guidance/min/max/maxStep 等，立即生效）；但**增删条目**做不到——那要改这份文件然后开新局。所以条目清单值得在这里一次定对。
 

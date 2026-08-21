@@ -196,3 +196,63 @@ export interface NumericDefRevision {
   maxStep?: number
   floor?: number
 }
+
+// ---- 经验与等级：GM 报经验，代码按阈值算等级与发点，玩家自己加点 ----
+
+export interface ProgressionConfig {
+  /** 经验值的显示名（"经验""进化点"……） */
+  label: string
+  /** 什么事件给多少经验——机械规则，给数字 */
+  guidance: string
+  /** 单回合经验变动上限 */
+  maxStep: number
+  /** 升到 2、3、…级各需累计多少经验，严格递增；表长 + 1 = 最高等级 */
+  thresholds: number[]
+  /** 每升一级发放的属性点 */
+  pointsPerLevel: number
+  /** 显示位置：strip 顶栏（缺省）/ panel 只进卷宗 */
+  display?: 'strip' | 'panel'
+}
+
+/** 投影内部状态：经验、等级、累计发放与已花的属性点（未分配 = granted - spent）。 */
+export interface ProgressionState {
+  xp: number
+  level: number
+  granted: number
+  spent: number
+}
+
+/** grant_xp 的落账：经验裁决 + 等级裁定 + 本次发放的属性点。 */
+export interface XpResult {
+  kind: 'mechanics/xp'
+  delta: number
+  applied: number
+  before: number
+  after: number
+  clamped: boolean
+  reason: string
+  levelBefore: number
+  levelAfter: number
+  pointsGranted: number
+}
+
+export function isXpResult(value: unknown): value is XpResult {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && (value as XpResult).kind === 'mechanics/xp'
+    && typeof (value as XpResult).after === 'number'
+  )
+}
+
+/**
+ * spend_points 的落账：复用属性 meta 形状（changes 直接折进属性投影，不另起一套），
+ * 附带 points 账供经验投影扣减未分配池。
+ */
+export interface PointsResult extends AttributesResult {
+  points: { spent: number }
+}
+
+export function isPointsResult(value: unknown): value is PointsResult {
+  return isAttributesResult(value) && typeof (value as PointsResult).points?.spent === 'number'
+}
