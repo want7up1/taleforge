@@ -77,7 +77,7 @@
 - 容器内 dsh 与 BFF 必须同进程空间（dsh 只信任 loopback），单容器双进程由 `docker/entrypoint.sh` 拉起。
 - 持久化只有一个卷：宿主机的 `<部署目录>/data` → 容器内 `DSH_HOME`，装着全部存档、凭据、编译产出的剧本 preset，以及 `scenarios/`（用户内容：工坊产出与修订落盘的剧本源，编译时覆盖仓库同 id 种子）。重建容器安全，删卷即丢档。
 - **API Key 由 WebUI 设置页写入**，经 dsh credentials 服务落到 `data/.credentials.yaml`，热生效、随卷持久化。`.env` 里保持没有 `DEEPSEEK_API_KEY`：环境变量是只读层，一旦有非空值就遮蔽写入通道，设置页会变成只读（此时 `credentials.describe` 返回 `writable: false`）。
-- 服务器用只读 deploy key 拉取，key 路径写进服务器仓库的 `core.sshCommand`，`git pull` 免密（具体路径见 `DEPLOY.local.md`）。
+- 仓库公开，服务器用 https 匿名拉取，不需要 deploy key 或任何凭据（部署主机与目录见本机私有的 `DEPLOY.local.md`）。
 - 更新流程：本地推送 → SSH 到目标服务器 → `cd <部署目录> && git pull && sudo docker compose up -d --build`。依赖层有缓存，仅改应用代码时重建很快。
 
 ## GM 提示词的分层（packages/scenario-compiler/src/persona.ts）
