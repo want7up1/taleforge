@@ -8,3 +8,8 @@ dist/
 runtime/dsh-home/
 # 部署时的持久化卷
 data/
+
+# 本机私有部署信息 / 覆盖层
+*.local.md
+*.local.yml
+docker-compose.override.yml

@@ -16,14 +16,14 @@ pnpm dev               # 并行启动 dsh 运行时 + BFF + 前端
 
 ## 部署
 
-生产环境固定为 <your-host> 的 Docker（`/path/to/taleforge`），只监听 127.0.0.1:31415。详见 `CLAUDE.md`。
-
-远程访问开隧道：`ssh -L 31415:127.0.0.1:31415 <your-host>`，然后浏览器打开 http://localhost:31415
+单容器双进程（dsh + BFF 必须同进程空间），只监听 `127.0.0.1:31415` —— 两者都没有认证，公网直接暴露等于把 API Key 和存档送人。远程访问走 SSH 隧道或加了认证的反向代理。
 
 ```sh
 ssh <your-host>
 cd /path/to/taleforge && sudo docker compose up -d --build
 ```
+
+远程访问开隧道：`ssh -L 31415:127.0.0.1:31415 <your-host>`，然后浏览器打开 http://localhost:31415
 
 ## 结构
 
