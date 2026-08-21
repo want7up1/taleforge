@@ -6,11 +6,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
 import { Dossier } from './Dossier.tsx'
-import { foldHistory, lastTurnDigest, messageOfEvent } from './fold.ts'
+import { foldHistory, lastSeqOf, lastTurnDigest, mergeMessages, messageOfEvent, planResume } from './fold.ts'
 import { GmChat, type GmChatItem } from './GmChat.tsx'
 import { MeterStrip, placementOf } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
+import { openSessionStream } from './stream.ts'
 import { parseTurn } from './turn.ts'
 import type {
   AttributesSnapshot,
@@ -92,6 +93,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
   const histReady = useRef(false)
   const chunkFloor = useRef(-1)
   const pendingChunks = useRef<{ seq: number; text: string }[]>([])
+  /** 实时流里见过的最近回合边界 seq：重拉历史时据此判断拉取窗口内回合有没有开始/结束 */
+  const liveTurnStart = useRef(-1)
+  const liveTurnEnd = useRef(-1)
   const scrollRef = useRef<HTMLDivElement>(null)
   /** 读者是否停在底部——决定流式输出要不要跟随滚动 */
   const atBottom = useRef(true)
@@ -125,154 +129,202 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
 
   useEffect(() => {
     let cancelled = false
+    let syncToken = 0
     setMessages([])
     setStreaming('')
     setRunning(false)
+    setPhase(undefined)
     setFreeMode(false)
     setError(undefined)
     histReady.current = false
     chunkFloor.current = -1
     pendingChunks.current = []
+    liveTurnStart.current = -1
+    liveTurnEnd.current = -1
 
-    const source = new EventSource(`/app/sessions/${sessionId}/events`)
-
-    // 先连上事件流再拉历史：空存档要在这里补发开场，早于 SSE 会漏掉整段流式输出
-    api.history(sessionId)
-      .then(({ events, projections, inflight }) => {
-        if (cancelled) return
-        // 断点续传：回合未收尾时接上已产出的部分，再补上等待期间到达的实时分片
-        if (inflight) {
-          chunkFloor.current = inflight.lastChunkSeq
-          const tail = pendingChunks.current
-            .filter(c => c.seq > inflight.lastChunkSeq)
-            .map(c => c.text)
-            .join('')
-          const resumed = inflight.partial + tail
-          setStreaming(resumed)
-          setRunning(true)
-          startedAt.current = inflight.startedAt
-          sawText.current = resumed.length > 0
-        }
-        histReady.current = true
-        pendingChunks.current = []
-        setMessages(foldHistory(events))
-        // 打开存档时立刻还原数值、幕进度与最近一回合的机制事件，不必等下一回合
-        if (projections?.values.mechanics) setMechanics(projections.values.mechanics)
-        if (projections?.values.attributes) setAttributes(projections.values.attributes)
-        if (projections?.values.inventory) setInventory(projections.values.inventory)
-        if (projections?.values.progress) setProgress(projections.values.progress)
+    /** 按历史快照对齐本地状态：首次打开与每次重连后都走这里，多次调用结果一致 */
+    const apply = (
+      { events, projections, inflight }: Awaited<ReturnType<typeof api.history>>,
+      initial: boolean,
+    ) => {
+      // 断点续传：回合未收尾时接上已产出的部分，再补上拉取期间到达的实时分片；
+      // 拉取窗口内实时流已见到回合结束/新回合开始的，以实时流为准
+      const plan = planResume({
+        entries: events,
+        asOfSeq: projections?.asOfSeq,
+        inflight,
+        liveTurnStart: liveTurnStart.current,
+        liveTurnEnd: liveTurnEnd.current,
+        pending: pendingChunks.current,
+      })
+      chunkFloor.current = plan.chunkFloor
+      pendingChunks.current = []
+      setStreaming(plan.streaming)
+      setRunning(plan.running)
+      if (plan.resumedInflight && inflight) {
+        startedAt.current = inflight.startedAt
+        sawText.current = plan.streaming.length > 0
+        setPhase(plan.streaming ? undefined : '构思中')
+      } else if (!plan.running) {
+        setPhase(undefined)
+      }
+      setMessages(prev => mergeMessages(foldHistory(events), prev, plan.boundary))
+      // 打开存档时立刻还原数值、幕进度与最近一回合的机制事件，不必等下一回合
+      const values = projections?.values
+      if (values?.mechanics) setMechanics(values.mechanics)
+      if (values?.attributes) setAttributes(values.attributes)
+      if (values?.inventory) setInventory(values.inventory)
+      if (values?.progress) setProgress(values.progress)
+      if (values?.sessionStats) setStats(values.sessionStats)
+      // 本回合结算卡：拉取窗口内已开了新回合的话，帧处理器正在累积，不用快照盖掉
+      if (!plan.startedMeanwhile) {
         const digest = lastTurnDigest(events)
         setSettlement(digest.settlement)
         setInvChanges(digest.inventory)
         setCheck(digest.check)
-        resetToTopRef.current()
-        // 新会话并非空日志（dsh 先写权限/沙箱等配置事件），只有 turn/start 能证明对话开过；
-        // 用它判断还能挡住"首回合生成中刷新页面"导致的重复开场。
-        const started = events.some(e => e.event.type === 'turn/start')
-        if (!started && opened.current !== sessionId) {
-          opened.current = sessionId
-          api.prompt(sessionId, '（开始）').catch(err => setError(String(err)))
-        }
-      })
-      .catch(err => setError(String(err)))
-    loadCatalog()
-
-    source.onmessage = (raw) => {
-      const frame = JSON.parse(raw.data) as MuxFrame
-      if (frame.type === 'session/projection' && frame.key === 'sessionStats') {
-        setStats(frame.value as SessionStats)
-        return
       }
-      if (frame.type === 'session/projection' && frame.key === 'mechanics') {
-        setMechanics(frame.value as MechanicsSnapshot)
-        return
-      }
-      if (frame.type === 'session/projection' && frame.key === 'attributes') {
-        setAttributes(frame.value as AttributesSnapshot)
-        return
-      }
-      if (frame.type === 'session/projection' && frame.key === 'inventory') {
-        setInventory(frame.value as InventorySnapshot)
-        return
-      }
-      if (frame.type === 'session/projection' && frame.key === 'progress') {
-        setProgress(frame.value as ProgressSnapshot)
-        return
-      }
-      if (frame.type !== 'session/event' || !frame.event) return
-      const event = frame.event
-
-      // 结算阶段可见化：等待的大头是推理与工具轮，报出正在做什么
-      if (event.type === 'tool/call') {
-        const name = (event.data as { name?: string }).name
-        if (name) setPhase(TOOL_PHASE[name] ?? '结算面板')
-        return
-      }
-
-      // 机制事件从 tool/result 的 meta 取，与正文同回合展示（turn/start 时清零）
-      if (event.type === 'tool/result') {
-        const meta = (event.data as { meta?: { kind?: string; changes?: unknown[] } }).meta
-        if (!meta?.kind) return
-        if ((meta.kind === 'mechanics/resources' || meta.kind === 'mechanics/attributes') && meta.changes?.length) {
-          setSettlement(prev => [...prev, ...(meta.changes as MechanicsChange[])])
-        }
-        if (meta.kind === 'mechanics/inventory' && meta.changes?.length) {
-          setInvChanges(prev => [...prev, ...(meta.changes as InventoryChange[])])
-        }
-        if (meta.kind === 'mechanics/check') setCheck(meta as unknown as CheckMeta)
-        return
-      }
-
-      if (event.type === 'turn/start') {
-        startedAt.current = Date.now()
-        setElapsed(0)
-        setRunning(true)
-        setPhase('构思中')
-        setStreaming('')
-        setSettlement([])
-        setInvChanges([])
-        setCheck(undefined)
-        sawText.current = false
-        setEmptyTurn(false)
-        // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
-        resetToTopRef.current()
-      }
-      if (event.type === 'turn/end') {
-        setRunning(false)
-        // 完成却没有任何可见正文：内容翻进了推理通道，给玩家一个重新生成的出口
-        const reason = (event.data as { reason?: { kind?: string } }).reason?.kind
-        if (reason === 'completed' && !sawText.current) setEmptyTurn(true)
-        offstageTurn.current = false
-      }
-
-      if (event.type === 'assistant/chunk') {
-        const chunk = event.data.chunk
-        if (chunk?.type === 'reasoning-delta' || chunk?.type === 'reasoning') setPhase('构思中')
-        if (chunk?.type === 'text-delta' && chunk.text) {
-          setPhase(undefined)
-          if (!histReady.current) {
-            pendingChunks.current.push({ seq: event.seq, text: chunk.text })
-          } else if (event.seq > chunkFloor.current) {
-            setStreaming(s => s + chunk.text)
-          }
-        }
-        if (chunk?.type === 'finish') {
-          const failure = (chunk as { reason?: { failure?: { message?: string } } }).reason?.failure
-          if (failure?.message) setError(failure.message)
-        }
-        return
-      }
-
-      const msg = messageOfEvent(event)
-      if (msg) {
-        if (msg.role === 'assistant') sawText.current = true
-        setMessages(prev => (prev.some(m => m.seq === msg.seq) ? prev : [...prev, msg]))
-        if (msg.role === 'assistant') setStreaming('')
+      // 阅读位置：首次打开归顶；重拉发现了实时流没见过的新回合（离开期间开始或结束的）也归顶
+      const lastStart = lastSeqOf(events, 'turn/start')
+      if (initial || lastStart > liveTurnStart.current) resetToTopRef.current()
+      liveTurnStart.current = Math.max(liveTurnStart.current, lastStart)
+      liveTurnEnd.current = Math.max(liveTurnEnd.current, lastSeqOf(events, 'turn/end'))
+      // 新会话并非空日志（dsh 先写权限/沙箱等配置事件），只有 turn/start 能证明对话开过；
+      // 用它判断还能挡住"首回合生成中刷新页面"导致的重复开场。
+      if (lastStart < 0 && opened.current !== sessionId) {
+        opened.current = sessionId
+        api.prompt(sessionId, '（开始）').catch(err => setError(String(err)))
       }
     }
+
+    /** 重拉历史并对齐。拉取期间实时分片先缓冲，对齐时按 seq 去重接上；并发拉取只认最后一次 */
+    const sync = async (initial: boolean) => {
+      const token = ++syncToken
+      histReady.current = false
+      let result: Awaited<ReturnType<typeof api.history>>
+      try {
+        result = await api.history(sessionId)
+      } catch (err) {
+        if (cancelled || token !== syncToken) return
+        // 拉不到就维持现状继续收流，不让缓冲把后续分片扣住
+        histReady.current = true
+        const tail = pendingChunks.current.filter(c => c.seq > chunkFloor.current).map(c => c.text).join('')
+        pendingChunks.current = []
+        if (tail) setStreaming(s => s + tail)
+        setError(String(err))
+        return
+      }
+      if (cancelled || token !== syncToken) return
+      apply(result, initial)
+      histReady.current = true
+    }
+
+    // 先连上事件流再拉历史（onLive 在连接建立后触发）：空存档要在这里补发开场，早于 SSE 会
+    // 漏掉整段流式输出。回前台/断线重连后同样重拉一遍，补齐连接不在期间漏掉的回合边界与消息——
+    // 否则 turn/end 一丢，界面就永远停在"生成中"读秒。
+    const stream = openSessionStream({
+      sessionId,
+      onLive: reconnect => void sync(!reconnect),
+      onFrame: (raw) => {
+        const frame = JSON.parse(raw.data) as MuxFrame
+        if (frame.type === 'session/projection' && frame.key === 'sessionStats') {
+          setStats(frame.value as SessionStats)
+          return
+        }
+        if (frame.type === 'session/projection' && frame.key === 'mechanics') {
+          setMechanics(frame.value as MechanicsSnapshot)
+          return
+        }
+        if (frame.type === 'session/projection' && frame.key === 'attributes') {
+          setAttributes(frame.value as AttributesSnapshot)
+          return
+        }
+        if (frame.type === 'session/projection' && frame.key === 'inventory') {
+          setInventory(frame.value as InventorySnapshot)
+          return
+        }
+        if (frame.type === 'session/projection' && frame.key === 'progress') {
+          setProgress(frame.value as ProgressSnapshot)
+          return
+        }
+        if (frame.type !== 'session/event' || !frame.event) return
+        const event = frame.event
+
+        // 结算阶段可见化：等待的大头是推理与工具轮，报出正在做什么
+        if (event.type === 'tool/call') {
+          const name = (event.data as { name?: string }).name
+          if (name) setPhase(TOOL_PHASE[name] ?? '结算面板')
+          return
+        }
+
+        // 机制事件从 tool/result 的 meta 取，与正文同回合展示（turn/start 时清零）
+        if (event.type === 'tool/result') {
+          const meta = (event.data as { meta?: { kind?: string; changes?: unknown[] } }).meta
+          if (!meta?.kind) return
+          if ((meta.kind === 'mechanics/resources' || meta.kind === 'mechanics/attributes') && meta.changes?.length) {
+            setSettlement(prev => [...prev, ...(meta.changes as MechanicsChange[])])
+          }
+          if (meta.kind === 'mechanics/inventory' && meta.changes?.length) {
+            setInvChanges(prev => [...prev, ...(meta.changes as InventoryChange[])])
+          }
+          if (meta.kind === 'mechanics/check') setCheck(meta as unknown as CheckMeta)
+          return
+        }
+
+        if (event.type === 'turn/start') {
+          liveTurnStart.current = event.seq
+          startedAt.current = Date.now()
+          setElapsed(0)
+          setRunning(true)
+          setPhase('构思中')
+          setStreaming('')
+          setSettlement([])
+          setInvChanges([])
+          setCheck(undefined)
+          sawText.current = false
+          setEmptyTurn(false)
+          // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
+          resetToTopRef.current()
+        }
+        if (event.type === 'turn/end') {
+          liveTurnEnd.current = event.seq
+          setRunning(false)
+          // 完成却没有任何可见正文：内容翻进了推理通道，给玩家一个重新生成的出口
+          const reason = (event.data as { reason?: { kind?: string } }).reason?.kind
+          if (reason === 'completed' && !sawText.current) setEmptyTurn(true)
+          offstageTurn.current = false
+        }
+
+        if (event.type === 'assistant/chunk') {
+          const chunk = event.data.chunk
+          if (chunk?.type === 'reasoning-delta' || chunk?.type === 'reasoning') setPhase('构思中')
+          if (chunk?.type === 'text-delta' && chunk.text) {
+            setPhase(undefined)
+            if (!histReady.current) {
+              pendingChunks.current.push({ seq: event.seq, text: chunk.text })
+            } else if (event.seq > chunkFloor.current) {
+              setStreaming(s => s + chunk.text)
+            }
+          }
+          if (chunk?.type === 'finish') {
+            const failure = (chunk as { reason?: { failure?: { message?: string } } }).reason?.failure
+            if (failure?.message) setError(failure.message)
+          }
+          return
+        }
+
+        const msg = messageOfEvent(event)
+        if (msg) {
+          if (msg.role === 'assistant') sawText.current = true
+          setMessages(prev => (prev.some(m => m.seq === msg.seq) ? prev : [...prev, msg]))
+          if (msg.role === 'assistant') setStreaming('')
+        }
+      },
+    })
+    loadCatalog()
+
     return () => {
       cancelled = true
-      source.close()
+      stream.close()
     }
   }, [sessionId, loadCatalog])
 

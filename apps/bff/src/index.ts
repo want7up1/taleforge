@@ -908,7 +908,8 @@ app.get('/app/sessions/:id/events', (req, res) => {
     if (frame.sessionId !== sessionId) return
     res.write(`data: ${JSON.stringify(frame)}\n\n`)
   })
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000)
+  // 心跳用具名事件而不是 SSE 注释：注释到不了页面脚本，前端要靠它判断连接是否已经静默断流
+  const heartbeat = setInterval(() => res.write('event: ping\ndata: {}\n\n'), 25_000)
 
   req.on('close', () => {
     clearInterval(heartbeat)

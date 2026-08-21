@@ -6,8 +6,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
-import { foldHistory, messageOfEvent } from './fold.ts'
+import { foldHistory, lastSeqOf, mergeMessages, messageOfEvent, planResume } from './fold.ts'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
+import { openSessionStream } from './stream.ts'
 import type { ChatMessage, MuxFrame } from './types.ts'
 
 interface Props {
@@ -49,9 +50,13 @@ export function Workshop({
   const histReady = useRef(false)
   const chunkFloor = useRef(-1)
   const pendingChunks = useRef<{ seq: number; text: string }[]>([])
+  /** 实时流里见过的最近回合边界 seq：重拉历史时据此判断拉取窗口内回合有没有开始/结束 */
+  const liveTurnStart = useRef(-1)
+  const liveTurnEnd = useRef(-1)
 
   useEffect(() => {
     let cancelled = false
+    let syncToken = 0
     setMessages([])
     setStreaming('')
     setRunning(false)
@@ -60,61 +65,93 @@ export function Workshop({
     histReady.current = false
     chunkFloor.current = -1
     pendingChunks.current = []
+    liveTurnStart.current = -1
+    liveTurnEnd.current = -1
 
-    const source = new EventSource(`/app/sessions/${sessionId}/events`)
-    api.history(sessionId)
-      .then(({ events, inflight }) => {
-        if (cancelled) return
-        setMessages(foldHistory(events))
-        if (inflight) {
-          chunkFloor.current = inflight.lastChunkSeq
-          const tail = pendingChunks.current
-            .filter(c => c.seq > inflight.lastChunkSeq)
-            .map(c => c.text)
-            .join('')
-          setStreaming(inflight.partial + tail)
-          setRunning(true)
-        }
-        histReady.current = true
-        pendingChunks.current = []
-        // 空会话补发开场白：工坊模式自我介绍抛选项；修改模式直接让 GM 读取目标剧本
-        const started = events.some(e => e.event.type === 'turn/start')
-        if (!started && opened.current !== sessionId) {
-          opened.current = sessionId
-          api.prompt(sessionId, opening).catch(err => setError(String(err)))
-        }
+    /** 按历史快照对齐本地状态：首次打开与每次重连后都走这里（断线期间漏掉的帧靠它补齐） */
+    const apply = ({ events, projections, inflight }: Awaited<ReturnType<typeof api.history>>) => {
+      const plan = planResume({
+        entries: events,
+        asOfSeq: projections?.asOfSeq,
+        inflight,
+        liveTurnStart: liveTurnStart.current,
+        liveTurnEnd: liveTurnEnd.current,
+        pending: pendingChunks.current,
       })
-      .catch(err => setError(String(err)))
-
-    source.onmessage = (raw) => {
-      const frame = JSON.parse(raw.data) as MuxFrame
-      if (frame.type !== 'session/event' || !frame.event) return
-      const event = frame.event
-      if (event.type === 'turn/start') {
-        setRunning(true)
-        setStreaming('')
-      }
-      if (event.type === 'turn/end') setRunning(false)
-      if (event.type === 'assistant/chunk') {
-        const chunk = event.data.chunk
-        if (chunk?.type === 'text-delta' && chunk.text) {
-          if (!histReady.current) {
-            pendingChunks.current.push({ seq: event.seq, text: chunk.text })
-          } else if (event.seq > chunkFloor.current) {
-            setStreaming(s => s + chunk.text)
-          }
-        }
-        return
-      }
-      const msg = messageOfEvent(event)
-      if (msg) {
-        setMessages(prev => (prev.some(m => m.seq === msg.seq) ? prev : [...prev, msg]))
-        if (msg.role === 'assistant') setStreaming('')
+      chunkFloor.current = plan.chunkFloor
+      pendingChunks.current = []
+      setStreaming(plan.streaming)
+      setRunning(plan.running)
+      setMessages(prev => mergeMessages(foldHistory(events), prev, plan.boundary))
+      const lastStart = lastSeqOf(events, 'turn/start')
+      liveTurnStart.current = Math.max(liveTurnStart.current, lastStart)
+      liveTurnEnd.current = Math.max(liveTurnEnd.current, lastSeqOf(events, 'turn/end'))
+      // 空会话补发开场白：工坊模式自我介绍抛选项；修改模式直接让 GM 读取目标剧本
+      if (lastStart < 0 && opened.current !== sessionId) {
+        opened.current = sessionId
+        api.prompt(sessionId, opening).catch(err => setError(String(err)))
       }
     }
+
+    /** 重拉历史并对齐。拉取期间实时分片先缓冲，对齐时按 seq 去重接上；并发拉取只认最后一次 */
+    const sync = async () => {
+      const token = ++syncToken
+      histReady.current = false
+      let result: Awaited<ReturnType<typeof api.history>>
+      try {
+        result = await api.history(sessionId)
+      } catch (err) {
+        if (cancelled || token !== syncToken) return
+        histReady.current = true
+        const tail = pendingChunks.current.filter(c => c.seq > chunkFloor.current).map(c => c.text).join('')
+        pendingChunks.current = []
+        if (tail) setStreaming(s => s + tail)
+        setError(String(err))
+        return
+      }
+      if (cancelled || token !== syncToken) return
+      apply(result)
+      histReady.current = true
+    }
+
+    // 连上事件流再拉历史；回前台/断线重连后重拉一遍补齐漏帧（同 Play）
+    const stream = openSessionStream({
+      sessionId,
+      onLive: () => void sync(),
+      onFrame: (raw) => {
+        const frame = JSON.parse(raw.data) as MuxFrame
+        if (frame.type !== 'session/event' || !frame.event) return
+        const event = frame.event
+        if (event.type === 'turn/start') {
+          liveTurnStart.current = event.seq
+          setRunning(true)
+          setStreaming('')
+        }
+        if (event.type === 'turn/end') {
+          liveTurnEnd.current = event.seq
+          setRunning(false)
+        }
+        if (event.type === 'assistant/chunk') {
+          const chunk = event.data.chunk
+          if (chunk?.type === 'text-delta' && chunk.text) {
+            if (!histReady.current) {
+              pendingChunks.current.push({ seq: event.seq, text: chunk.text })
+            } else if (event.seq > chunkFloor.current) {
+              setStreaming(s => s + chunk.text)
+            }
+          }
+          return
+        }
+        const msg = messageOfEvent(event)
+        if (msg) {
+          setMessages(prev => (prev.some(m => m.seq === msg.seq) ? prev : [...prev, msg]))
+          if (msg.role === 'assistant') setStreaming('')
+        }
+      },
+    })
     return () => {
       cancelled = true
-      source.close()
+      stream.close()
     }
   }, [sessionId, opening])
 

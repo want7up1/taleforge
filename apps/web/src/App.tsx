@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
 import { History } from './History.tsx'
@@ -11,8 +11,20 @@ import type { CredentialStatus, ScenarioSummary, SessionSummary, StoryDetail } f
 
 type View = 'library' | 'settings' | 'play' | 'history' | 'workshop' | 'scenario' | 'edit'
 
+/**
+ * 挂载前捕获的初始 hash。刷新恢复必须用它而不是现读 location.hash：下面的 hash 同步
+ * effect 先于恢复 effect 执行，首轮就会把 #/play 改写成 #/library，现读只能读到改写后
+ * 的值（实测如此——刷新因此永远退回剧本库）。
+ */
+const initialHash = location.hash
+/** 要先拉数据才能进的界面：恢复完成前不许 hash 同步 effect 改写地址 */
+const needsAsyncRestore = (hash: string) =>
+  hash === '#/play' || hash === '#/history' || hash === '#/workshop'
+  || hash.startsWith('#/scenario/') || hash.startsWith('#/edit/')
+
 export function App() {
-  const [view, setView] = useState<View>('library')
+  const [view, setView] = useState<View>(initialHash === '#/settings' ? 'settings' : 'library')
+  const restoring = useRef(needsAsyncRestore(initialHash))
   const [scenarios, setScenarios] = useState<ScenarioSummary[]>([])
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [credential, setCredential] = useState<CredentialStatus>()
@@ -47,6 +59,7 @@ export function App() {
   // ---- hash 路由：每个界面一条浏览器历史，前进/后退可用 ----
 
   useEffect(() => {
+    if (restoring.current) return
     const target
       = view === 'scenario' && detail ? `#/scenario/${detail.id}`
         : view === 'edit' && detail ? `#/edit/${detail.id}`
@@ -96,30 +109,42 @@ export function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [active, workshopId, detail, edit])
 
-  // 刷新/深链恢复：带着 #/play、#/workshop、#/scenario/<id>、#/edit/<id> 打开时直接回到对应界面
+  // 刷新/深链恢复：带着 #/play、#/history、#/workshop、#/scenario/<id>、#/edit/<id> 打开时，
+  // 先拉齐前置状态再进对应界面（#/settings 在初始 state 里直接进）。
+  // 恢复结束前 hash 同步 effect 保持沉默，否则恢复目标在挂载瞬间就被改写掉。
   useEffect(() => {
-    const initial = location.hash
-    if (initial === '#/play' || initial === '#/history') {
-      void api.listSessions().then(({ items }) => {
+    if (!restoring.current) return
+    const done = (restored: boolean) => {
+      restoring.current = false
+      // 恢复不成（会话/剧本已不在）：地址静默改回剧本库，不多留一条浏览历史
+      if (!restored) history.replaceState(null, '', '#/library')
+    }
+    if (initialHash === '#/play' || initialHash === '#/history') {
+      api.listSessions().then(async ({ items }) => {
         const live = items.filter(s => !s.blank)[0]
-        if (live) void enterSession(live.sessionId, live.agentPreset)
-      }).catch(() => undefined)
-    } else if (initial === '#/workshop') {
-      void enterWorkshop()
-    } else if (initial === '#/settings') {
-      setView('settings')
-    } else if (initial.startsWith('#/scenario/')) {
-      const id = initial.slice('#/scenario/'.length)
-      void api.scenario(id).then((s) => {
+        if (!live) return done(false)
+        await enterSession(live.sessionId, live.agentPreset)
+        if (initialHash === '#/history') setView('history')
+        done(true)
+      }).catch(() => done(false))
+    } else if (initialHash === '#/workshop') {
+      void enterWorkshop().then(done)
+    } else if (initialHash.startsWith('#/scenario/')) {
+      const id = initialHash.slice('#/scenario/'.length)
+      api.scenario(id).then((s) => {
         setDetail(s)
         setView('scenario')
-      }).catch(() => undefined)
-    } else if (initial.startsWith('#/edit/')) {
-      const id = initial.slice('#/edit/'.length)
-      void api.scenario(id).then(async (s) => {
+        done(true)
+      }).catch(() => done(false))
+    } else if (initialHash.startsWith('#/edit/')) {
+      const id = initialHash.slice('#/edit/'.length)
+      api.scenario(id).then(async (s) => {
         setDetail(s)
         await openEdit(s)
-      }).catch(() => undefined)
+        done(true)
+      }).catch(() => done(false))
+    } else {
+      done(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -159,14 +184,16 @@ export function App() {
     await enterSession(session.sessionId, session.agentPreset)
   }
 
-  const enterWorkshop = async () => {
+  const enterWorkshop = async (): Promise<boolean> => {
     try {
       setError(undefined)
       const { sessionId } = await api.workshop()
       setWorkshopId(sessionId)
       setView('workshop')
+      return true
     } catch (err) {
       setError(String(err))
+      return false
     }
   }
 
