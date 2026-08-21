@@ -1,6 +1,6 @@
 /** 卷宗抽屉：剧本静态信息 + 幕进度 + 会话统计。数据全部来自投影与剧本详情。 */
 import { useEffect } from 'react'
-import { levelPct, MeterPanel } from './Meters.tsx'
+import { levelLabel, levelPct, MeterPanel } from './Meters.tsx'
 import type {
   AttributesSnapshot,
   InventorySnapshot,
@@ -68,8 +68,9 @@ export function Dossier({ story, stats, mechanics, attributes, inventory, progre
           <section>
             <h3>等级</h3>
             <div className="level-row">
-              <b>Lv.{progression.level}</b>
+              <b>{levelLabel(progression, progression.level)}</b>
               <span className="muted">
+                {progression.levelNames ? `${progression.level}/${progression.maxLevel} 级 · ` : ''}
                 {progression.label} {progression.xp}{progression.next !== null ? ` / ${progression.next}` : '（满级）'}
               </span>
             </div>

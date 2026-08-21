@@ -46,14 +46,25 @@ export function initialProgression(): ProgressionState {
   return { xp: 0, level: 1, granted: 0, spent: 0 }
 }
 
-/** 裁决一次经验变动：裁单次上限与值域，按阈值算等级，升级发点。等级只升不降。 */
+/** 某级的显示名：剧本给了 levelNames 用它，否则 Lv.N */
+export function levelLabel(config: Pick<ProgressionConfig, 'levelNames'>, level: number): string {
+  return config.levelNames?.[level - 1] ?? `Lv.${level}`
+}
+
+/**
+ * 裁决一次经验变动：裁单次上限与值域，按阈值算等级，升级发点；另可附带剧情奖励点
+ * （裁 bonusPointsMax，进同一个待分配池）。等级只升不降。
+ */
 export function applyXp(
   state: ProgressionState,
   config: ProgressionConfig,
   delta: number,
   reason: string,
+  bonus = 0,
 ): { state: ProgressionState; result: XpResult } {
   const amount = Number.isFinite(delta) ? Math.trunc(delta) : 0
+  const bonusCap = Math.max(0, config.bonusPointsMax ?? 0)
+  const bonusPoints = Math.min(bonusCap, Math.max(0, Number.isFinite(bonus) ? Math.trunc(bonus) : 0))
   const before = state.xp
   let after = before
   let applied = 0
@@ -70,7 +81,7 @@ export function applyXp(
   const levelBefore = state.level
   // 经验可以被扣，已到手的等级与点数不收回
   const levelAfter = Math.max(levelBefore, levelOf(after, config.thresholds))
-  const pointsGranted = (levelAfter - levelBefore) * config.pointsPerLevel
+  const pointsGranted = (levelAfter - levelBefore) * config.pointsPerLevel + bonusPoints
   const result: XpResult = {
     kind: 'mechanics/xp',
     delta: amount,
@@ -82,11 +93,10 @@ export function applyXp(
     levelBefore,
     levelAfter,
     pointsGranted,
+    bonusPoints,
   }
-  return {
-    state: { ...state, xp: after, level: levelAfter, granted: state.granted + pointsGranted },
-    result,
-  }
+  // 工具侧与投影侧只能有一种"经验结果怎么改状态"的定义——折叠函数就是那个定义
+  return { state: reduceProgression(state, result), result }
 }
 
 export interface PointAllocation {
@@ -167,6 +177,29 @@ export function parseAllocationRequest(text: string): PointAllocation[] | undefi
   }
 }
 
+/**
+ * 最近一条玩家消息里的加点请求（BFF 回合头注入块携带的 allocations=[…]）；没有即玩家本回合没要求加点。
+ * 同时报告这条消息之后是否已经有一笔加点落账——同一回合只许落账一次，GM 重复调用不重复扣。
+ */
+export function playerAllocationRequest(
+  events: readonly { type: string; data: unknown }[],
+): { request?: PointAllocation[]; alreadySpent: boolean } {
+  let alreadySpent = false
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event.type === 'tool/result') {
+      if (isPointsResult((event.data as { meta?: unknown }).meta)) alreadySpent = true
+      continue
+    }
+    if (event.type !== 'user/message') continue
+    const content = (event.data as { content?: { text?: string }[] }).content
+    const text = Array.isArray(content) ? content.map(b => (typeof b?.text === 'string' ? b.text : '')).join('\n') : ''
+    const request = parseAllocationRequest(text)
+    return request ? { request, alreadySpent } : { alreadySpent }
+  }
+  return { alreadySpent }
+}
+
 /** 投影折叠的一步：不认识的 meta 原样返回同一引用。 */
 export function reduceProgression(state: ProgressionState, meta: unknown): ProgressionState {
   if (isXpResult(meta)) {
@@ -192,6 +225,8 @@ export interface ProgressionView {
   next: number | null
   unspent: number
   pointsPerLevel: number
+  /** 各级显示名（剧本声明了才有）；界面据此把 Lv.N 换成 C/B/A… */
+  levelNames?: string[]
   display?: 'strip' | 'panel'
 }
 
@@ -208,6 +243,7 @@ export function progressionView(config: ProgressionConfig, state: ProgressionSta
     pointsPerLevel: config.pointsPerLevel,
   }
   // dsh 要求工具/投影输出无损 JSON：可选字段不给就整个省略
+  if (config.levelNames) view.levelNames = config.levelNames
   if (config.display) view.display = config.display
   return view
 }
@@ -217,17 +253,28 @@ export function renderXp(result: XpResult & { unspent: number }, config: Progres
   const { label } = config
   const next = result.levelAfter < maxLevelOf(config) ? config.thresholds[result.levelAfter - 1] : null
   const where = `${result.after}${next !== null ? `/${next}` : '（满级）'}`
+  const lv = (n: number) => (config.levelNames ? `${levelLabel(config, n)}（Lv.${n}）` : `Lv.${n}`)
   const lines: string[] = []
-  if (result.applied === 0 && result.delta === 0) {
-    lines.push(`本回合${label}无变化（当前 ${where}，Lv.${result.levelAfter}）。`)
+  if (result.applied === 0) {
+    // 提交了却一分没加：只可能是已封顶（满级后不再累积）
+    lines.push(result.delta !== 0
+      ? `${label}未增加：已满级，不再累积（原提交 ${result.delta}；当前 ${where}，${lv(result.levelAfter)}）。`
+      : `本回合${label}无变化（当前 ${where}，${lv(result.levelAfter)}）。`)
   } else {
     const sign = result.applied > 0 ? '+' : ''
     const note = result.clamped ? `（原提交 ${result.delta}，已按边界裁决）` : ''
-    lines.push(`${label} ${sign}${result.applied} → ${where}${note}，Lv.${result.levelAfter}${next !== null ? `，距下一级还差 ${next - result.after}` : ''}。`)
+    lines.push(`${label} ${sign}${result.applied} → ${where}${note}，${lv(result.levelAfter)}${next !== null ? `，距下一级还差 ${next - result.after}` : ''}。`)
+  }
+  const levelPoints = result.pointsGranted - result.bonusPoints
+  if (levelPoints > 0) {
+    lines.push(`【升级】${lv(result.levelBefore)} → ${lv(result.levelAfter)}，发放 ${levelPoints} 点属性点，由玩家自行分配。`
+      + '本回合正文要把升级写成可感的瞬间（怎么写按剧本规则），不出现数字；不要替玩家加点。')
+  }
+  if (result.bonusPoints > 0) {
+    lines.push(`【奖励点】发放 ${result.bonusPoints} 点剧情奖励属性点，进玩家的待分配池——方向由玩家在卷宗里选，你不替玩家加。`)
   }
   if (result.pointsGranted > 0) {
-    lines.push(`【升级】Lv.${result.levelBefore} → Lv.${result.levelAfter}，发放 ${result.pointsGranted} 点属性点，由玩家自行分配（当前未分配 ${result.unspent} 点）。`
-      + '本回合正文要把升级写成可感的瞬间（怎么写按剧本规则），不出现数字；不要替玩家加点。')
+    lines.push(`当前未分配 ${result.unspent} 点。`)
   } else if (result.unspent > 0) {
     lines.push(`玩家还有 ${result.unspent} 点属性点未分配（由玩家在卷宗里加点，你不用处理）。`)
   }

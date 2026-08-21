@@ -152,12 +152,19 @@ ${mech.attributes.map(a => `- \`${a.id}\` **${a.label}**（${a.min}–${a.max}�
   if (mech?.progression) {
     const p = mech.progression
     const maxLevel = p.thresholds.length + 1
+    const names = p.levelNames
+    const levelList = p.thresholds
+      .map((t, i) => `${names ? `${names[i + 1]}（${i + 2} 级）` : `${i + 2} 级`}需累计 ${t}`)
+      .join('、')
+    const bonus = p.bonusPointsMax > 0
+      ? `\n- 剧情奖励属性点：剧本规则写明的奖励（见上文）在同一次 \`grant_xp\` 里用 \`points\` 发放（单次最多 ${p.bonusPointsMax}），同样进玩家的待分配池、**方向由玩家选**——不要自己用 \`adjust_attributes\` 替玩家加。`
+      : ''
     mechSections.push(`## 经验与等级（${p.label}）
 
 ${p.guidance}
 
-- 回合固定流程中用 \`grant_xp\` 上报本回合获得的${p.label}（每个正戏回合必调，没有就传 0），单次最多 ${p.maxStep}。等级由系统按阈值裁定（升到 ${p.thresholds.map((_, i) => i + 2).join('/')} 级各需累计 ${p.thresholds.join('/')}，满级 ${maxLevel} 级），升级时系统发放 ${p.pointsPerLevel} 点属性点，**由玩家自行分配，你不替玩家加点**。
-- 系统宣布升级的回合，把升级写成剧情里可感的瞬间（力量灌进身体、感官变敏锐、旁人的反应……）；正文不出现等级与${p.label}数字。
+- 回合固定流程中用 \`grant_xp\` 上报${p.label}（每个正戏回合必调，没有就传 0；和 \`report_progress\` 一样在动笔之前调——只报往回合已定稿正文里的事件换来的${p.label}，本回合才打算写的下回合再报），单次最多 ${p.maxStep}。等级由系统按阈值裁定（${names ? `各级名称 ${names.join('/')}；` : ''}${levelList}，满级 ${maxLevel} 级${names ? `=${names[maxLevel - 1]}` : ''}），升级时系统发放 ${p.pointsPerLevel} 点属性点，**由玩家自行分配，你不替玩家加点**。${bonus}
+- 系统宣布升级的回合，把升级写成剧情里可感的瞬间（力量灌进身体、感官变敏锐、旁人的反应……）；正文不出现等级与${p.label}数字${names ? `（等级名称可以作为世界观词汇出现在对白与认知里，如"他已是 ${names[1]} 级"）` : ''}。
 - 玩家消息带【加点】块时，固定流程第 2 步第一件事是调 \`spend_points\`，按玩家写的分配原样落账（id 用属性表里的 id；不增不减不改动），随后在正文里用一两句写出这份成长。`)
   }
   if (mech?.checks) {

@@ -22,7 +22,7 @@ import {
   applyXp,
   foldProgression,
   initialProgression,
-  parseAllocationRequest,
+  playerAllocationRequest,
   progressionView,
   reduceProgression,
   renderSpend,
@@ -117,6 +117,7 @@ const progressionSchema = z.object({
   next: z.number().nullable(),
   unspent: z.number(),
   pointsPerLevel: z.number(),
+  levelNames: z.array(z.string()).optional(),
   display: z.enum(['strip', 'panel']).optional(),
 })
 
@@ -335,12 +336,20 @@ export function apply(ctx: Context, config: Config) {
 
     ctx.tools.register(defineTool({
       name: 'grant_xp',
-      description: `上报本回合的${xpLabel}变化——每个正戏回合必调，没有变化传 0。`
+      description: `上报${xpLabel}变化——每个正戏回合必调，没有变化传 0。本工具在你动笔之前调用：`
+        + `只报**往回合已定稿正文**里发生的事件换来的${xpLabel}（通常是上一回合），本回合才打算写的不报、写完等下回合再报——`
+        + '等级与属性点一经发放不收回，预报等于把成长赶进度。'
         + `给多少按 persona 里的规则给数字，系统裁单次上限 ±${progression.maxStep}；`
-        + '等级由系统按阈值裁定，升级时系统发放属性点并交给玩家自行分配——你不替玩家加点。',
+        + '等级由系统按阈值裁定，升级时系统发放属性点并交给玩家自行分配——你不替玩家加点。'
+        + ((progression.bonusPointsMax ?? 0) > 0
+          ? `剧情奖励属性点用 points 发放（单次最多 ${progression.bonusPointsMax}），同样进玩家的待分配池、由玩家选方向。`
+          : ''),
       parameters: {
-        amount: { type: 'integer', required: true, description: `本回合获得（负数为失去）的${xpLabel}，没有传 0` },
+        amount: { type: 'integer', required: true, description: `往回合已定稿正文换来的${xpLabel}（负数为失去），没有传 0` },
         reason: { type: 'string', required: true, description: '一句话原因，玩家可见' },
+        ...((progression.bonusPointsMax ?? 0) > 0
+          ? { points: { type: 'integer', description: `剧情奖励属性点（按剧本规则给数字，单次最多 ${progression.bonusPointsMax}），没有传 0 或省略` } }
+          : {}),
       },
       output: {
         schema: {
@@ -356,6 +365,7 @@ export function apply(ctx: Context, config: Config) {
             levelBefore: { type: 'integer', required: true },
             levelAfter: { type: 'integer', required: true },
             pointsGranted: { type: 'integer', required: true },
+            bonusPoints: { type: 'integer', required: true },
             unspent: { type: 'integer', required: true },
           },
         },
@@ -368,7 +378,8 @@ export function apply(ctx: Context, config: Config) {
       execute(args, exec) {
         if (!exec.agent) throw new Error('grant_xp 需要一个归属会话')
         const state = readProgression(exec.agent.session.events)
-        const { state: next, result } = applyXp(state, progression, Number(args.amount), String(args.reason ?? ''))
+        const bonus = Number((args as { points?: unknown }).points ?? 0)
+        const { state: next, result } = applyXp(state, progression, Number(args.amount), String(args.reason ?? ''), bonus)
         const { kind: _kind, ...rest } = result
         return Promise.resolve({ ...rest, unspent: next.granted - next.spent })
       },
@@ -440,20 +451,21 @@ export function apply(ctx: Context, config: Config) {
         const prog = readProgression(events)
         const unspent = prog.granted - prog.spent
         const proposed = (Array.isArray(args.allocations) ? args.allocations : []) as PointAllocation[]
+        const rejectAll = (reason: string) => Promise.resolve({
+          changes: [],
+          spent: 0,
+          unspent,
+          rejected: proposed.map(a => ({
+            id: String(a?.id ?? ''),
+            points: Number.isFinite(Number(a?.points)) ? Math.trunc(Number(a?.points)) : 0,
+            reason,
+          })),
+        })
         // 代码权威：属性点只能由玩家分配。以玩家消息里的加点请求为准，GM 传的只作对照
-        const request = lastPlayerAllocationRequest(events)
-        if (!request) {
-          return Promise.resolve({
-            changes: [],
-            spent: 0,
-            unspent,
-            rejected: proposed.map(a => ({
-              id: String(a?.id ?? ''),
-              points: Number.isFinite(Number(a?.points)) ? Math.trunc(Number(a?.points)) : 0,
-              reason: '本回合玩家消息里没有【加点】请求——属性点只能由玩家分配，不能替玩家加',
-            })),
-          })
-        }
+        const { request, alreadySpent } = playerAllocationRequest(events)
+        if (!request) return rejectAll('本回合玩家消息里没有【加点】请求——属性点只能由玩家分配，不能替玩家加')
+        // 同一回合只落账一次：GM 重复调用不重复扣（玩家请求还在那条消息里，不能靠它去重）
+        if (alreadySpent) return rejectAll('本回合的加点已经落账过，不重复扣')
         const outcome = applyAllocations(current, defs, unspent, request)
         const extra = proposed
           .filter(a => !request.some(r => r.id === a?.id))
@@ -701,18 +713,6 @@ function readNumeric(
     if (meta) batches.push(meta.changes)
   }
   return foldApplied(defs, batches)
-}
-
-/** 最近一条玩家消息里的加点请求（BFF 回合头注入块携带的 allocations=[…]）；没有即玩家本回合没要求加点。 */
-function lastPlayerAllocationRequest(events: SessionEvents): PointAllocation[] | undefined {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i]
-    if (event.type !== 'user/message') continue
-    const content = (event.data as { content?: { text?: string }[] }).content
-    const text = Array.isArray(content) ? content.map(b => (typeof b?.text === 'string' ? b.text : '')).join('\n') : ''
-    return parseAllocationRequest(text)
-  }
-  return undefined
 }
 
 /** 从会话事件里读出经验/等级/点数账（经验 meta + 加点 meta 按序折叠）。 */

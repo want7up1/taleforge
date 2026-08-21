@@ -325,10 +325,37 @@ test('progression 进 persona：经验等级段、固定流程里 grant_xp 必�
   const persona = renderPersona(parsed)
   assert.match(persona, /## 经验与等级（进化点）/)
   assert.match(persona, /吞噬晶核 \+20/)
-  assert.match(persona, /升到 2\/3 级各需累计 40\/100，满级 3 级/)
+  assert.match(persona, /2 级需累计 40、3 级需累计 100，满级 3 级/)
   assert.match(persona, /`grant_xp` 每个正戏回合必调（没有传 0）/)
   assert.match(persona, /【加点】时第一件事先 `spend_points`/)
   assert.match(persona, /属性主要靠玩家用属性点加点成长/)
   // 没声明就一个字都不出现
   assert.doesNotMatch(renderPersona(storySchema.parse(story)), /grant_xp|经验与等级/)
+})
+
+test('资源 id 接受 kebab-case（首段可含连字符），冒号命名空间仍可用', () => {
+  const res = (id: string) => ({ id, label: 'x', group: 'self', min: 0, max: 10, initial: 0, maxStep: 1, guidance: 'x' })
+  const ok = storySchema.parse({ ...story, mechanics: { resources: [res('desire-jiangtang'), res('affinity:suwan'), res('evolution')] } })
+  assert.equal(ok.mechanics?.resources?.length, 3)
+  assert.throws(() => storySchema.parse({ ...story, mechanics: { resources: [res('Desire')] } }))
+  assert.throws(() => storySchema.parse({ ...story, mechanics: { resources: [res('a:b:c')] } }))
+})
+
+test('progression：levelNames 长度必须等于阈值数+1；bonusPointsMax 缺省 0；persona 带级名与奖励点规则', () => {
+  const attrs = [{ id: 'str', label: '力量', initial: 3, guidance: 'x' }]
+  const base = { guidance: 'x', maxStep: 3, thresholds: [6, 16], pointsPerLevel: 2 }
+  assert.throws(
+    () => storySchema.parse({ ...story, mechanics: { attributes: attrs, progression: { ...base, levelNames: ['C', 'B'] } } }),
+    /levelNames/,
+  )
+  const plain = storySchema.parse({ ...story, mechanics: { attributes: attrs, progression: base } })
+  assert.equal(plain.mechanics?.progression?.bonusPointsMax, 0)
+  assert.doesNotMatch(renderPersona(plain), /剧情奖励属性点/)
+  const rich = storySchema.parse({
+    ...story,
+    mechanics: { attributes: attrs, progression: { ...base, levelNames: ['C', 'B', 'A'], bonusPointsMax: 5 } },
+  })
+  const persona = renderPersona(rich)
+  assert.match(persona, /各级名称 C\/B\/A；B（2 级）需累计 6、A（3 级）需累计 16，满级 3 级=A/)
+  assert.match(persona, /剧情奖励属性点.*points.*单次最多 5/)
 })

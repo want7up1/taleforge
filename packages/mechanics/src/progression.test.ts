@@ -109,3 +109,39 @@ test('parseAllocationRequest：从回合头注入块取玩家的加点请求，�
   assert.equal(parseAllocationRequest('A. 出发\n【加点】体魄 +1'), undefined, '玩家原话里没有换算后的请求就不算')
   assert.equal(parseAllocationRequest('allocations=[not json'), undefined)
 })
+
+test('playerAllocationRequest：取最近一条玩家消息里的请求，并识别同回合已落账过', async () => {
+  const { playerAllocationRequest } = await import('./progression.ts')
+  const user = (text: string) => ({ type: 'user/message', data: { content: [{ type: 'text', text: 'A. 出发' }, { type: 'text', text }] } })
+  const spend = { type: 'tool/result', data: { meta: { kind: 'mechanics/attributes', changes: [], points: { spent: 1 } } } }
+  const other = { type: 'tool/result', data: { meta: { kind: 'mechanics/xp', after: 1, levelAfter: 1, pointsGranted: 0 } } }
+  const req = '【回合流程】…\n【加点】…：allocations=[{"id":"str","points":1}]'
+  assert.deepEqual(playerAllocationRequest([user(req), other]), { request: [{ id: 'str', points: 1 }], alreadySpent: false })
+  assert.deepEqual(playerAllocationRequest([user(req), spend, other]), { request: [{ id: 'str', points: 1 }], alreadySpent: true })
+  // 上一回合落过账不算本回合：以最近一条玩家消息为界
+  assert.deepEqual(playerAllocationRequest([user(req), spend, user(req)]), { request: [{ id: 'str', points: 1 }], alreadySpent: false })
+  assert.deepEqual(playerAllocationRequest([user('【回合流程】…没有加点')]), { alreadySpent: false })
+  assert.deepEqual(playerAllocationRequest([]), { alreadySpent: false })
+})
+
+test('剧情奖励点：裁 bonusPointsMax 进同一个池；levelNames 取显示名', async () => {
+  const { applyXp, levelLabel, progressionView, renderXp } = await import('./progression.ts')
+  const cfg = { ...config, bonusPointsMax: 5, levelNames: ['C', 'B', 'A', 'S'] }
+  const r = applyXp(initialProgression(), cfg, 1, '结合', 9)
+  assert.equal(r.result.bonusPoints, 5, '奖励点裁到单次上限')
+  assert.equal(r.result.pointsGranted, 5, '没升级时发放 = 奖励点')
+  assert.equal(r.state.granted, 5)
+  const view = progressionView(cfg, r.state)
+  assert.equal(view.unspent, 5)
+  assert.deepEqual(view.levelNames, ['C', 'B', 'A', 'S'])
+  assert.equal(levelLabel(cfg, 1), 'C')
+  assert.equal(levelLabel(config, 1), 'Lv.1')
+  // 升级 + 奖励点同回合：总发放 = 升级点 + 奖励点，GM 文本两项分开说
+  const up = applyXp(r.state, cfg, 40, '大胜', 2)
+  assert.equal(up.result.pointsGranted, 2 + 2)
+  const text = renderXp({ ...up.result, unspent: 9 }, cfg)
+  assert.match(text, /【升级】C（Lv.1） → B（Lv.2），发放 2 点/)
+  assert.match(text, /【奖励点】发放 2 点/)
+  // 没开放奖励点的剧本：points 一律裁成 0
+  assert.equal(applyXp(initialProgression(), config, 0, '', 3).result.bonusPoints, 0)
+})

@@ -42,6 +42,7 @@ export interface StoryDetail {
     attributes?: unknown[]
     checks?: { die?: string }
     inventory?: { initial?: unknown[] }
+    progression?: { thresholds?: number[]; pointsPerLevel?: number }
   }
 }
 
@@ -138,10 +139,12 @@ export interface ProgressionSnapshot {
   next: number | null
   unspent: number
   pointsPerLevel: number
+  /** 各级显示名（剧本声明了才有），代替 Lv.N */
+  levelNames?: string[]
   display?: 'strip' | 'panel'
 }
 
-/** tool/result.meta 里的一次经验结算（含升级发点） */
+/** tool/result.meta 里的一次经验结算（含升级发点与剧情奖励点） */
 export interface XpMeta {
   applied: number
   before: number
@@ -149,7 +152,10 @@ export interface XpMeta {
   reason: string
   levelBefore: number
   levelAfter: number
+  /** 本次发放的属性点总数（升级点 + 奖励点） */
   pointsGranted: number
+  /** 其中的剧情奖励点 */
+  bonusPoints?: number
 }
 
 /** tool/result.meta 里的一次判定裁决 */

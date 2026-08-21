@@ -145,6 +145,7 @@ export function ScenarioDetail({
         mech.attributes?.length ? `属性 ×${mech.attributes.length}` : null,
         mech.checks ? `掷骰判定（${mech.checks.die ?? 'd20'}）` : null,
         mech.inventory ? `物品栏（初始 ${mech.inventory.initial?.length ?? 0} 件）` : null,
+        mech.progression ? `经验等级（满级 ${(mech.progression.thresholds?.length ?? 0) + 1}，每级 ${mech.progression.pointsPerLevel ?? '?'} 点）` : null,
       ].filter(Boolean) as string[]
     : []
 

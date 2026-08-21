@@ -76,7 +76,7 @@ export const storySchema = z.object({
     .object({
       /** 资源条：随剧情涨落的数值（好感、体力、物资……） */
       resources: z.array(z.object({
-        id: z.string().regex(/^[a-z][a-z0-9]*(:[a-z][a-z0-9-]*)?$/, '资源 id 形如 evolution 或 affinity:suwan'),
+        id: z.string().regex(/^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)?$/, '资源 id 为 kebab-case，可带一个冒号命名空间（如 evolution、desire-suwan、affinity:suwan）'),
         label: z.string().min(1),
         group: z.enum(['affinity', 'self', 'world']),
         min: z.number().int(),
@@ -150,9 +150,18 @@ export const storySchema = z.object({
           .refine(t => t.every((v, i) => i === 0 || v > t[i - 1]), '阈值必须严格递增'),
         /** 每升一级发放的属性点 */
         pointsPerLevel: z.number().int().positive(),
+        /**
+         * 剧情奖励属性点的单次上限（grant_xp 的 points 参数）：GM 按 guidance 发放，进同一个
+         * 待分配池由玩家自己加点。0（缺省）= 不开放剧情奖励点，属性只靠升级点成长。
+         */
+        bonusPointsMax: z.number().int().nonnegative().default(0),
+        /** 各级显示名（C/B/A/S…），长度须等于阈值数 + 1；不给则显示 Lv.N */
+        levelNames: z.array(z.string().min(1)).optional(),
         /** 显示位置：strip 顶栏（缺省）/ panel 只进卷宗 */
         display: z.enum(['strip', 'panel']).optional(),
-      }).optional(),
+      })
+        .refine(p => !p.levelNames || p.levelNames.length === p.thresholds.length + 1, 'levelNames 长度必须等于 thresholds 长度 + 1（每级一个名字）')
+        .optional(),
     })
     .refine(m => m.resources || m.attributes || m.checks || m.inventory, '声明了 mechanics 就至少要启用一个模块')
     .refine(m => !m.progression || m.attributes, '经验等级需要同时声明 attributes——属性点要加在属性上')

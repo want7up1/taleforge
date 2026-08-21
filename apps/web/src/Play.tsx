@@ -8,7 +8,7 @@ import { Brand } from './Brand.tsx'
 import { Dossier } from './Dossier.tsx'
 import { foldHistory, lastSeqOf, lastTurnDigest, mergeMessages, messageOfEvent, planResume } from './fold.ts'
 import { GmChat, type GmChatItem } from './GmChat.tsx'
-import { LevelStrip, MeterStrip, placementOf } from './Meters.tsx'
+import { levelLabel, LevelStrip, MeterStrip, placementOf } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { openSessionStream } from './stream.ts'
@@ -150,6 +150,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     pendingChunks.current = []
     liveTurnStart.current = -1
     liveTurnEnd.current = -1
+    // 换会话（重写回合 fork 出子会话）：待分配的加点与上回合经验结算都属于旧会话
+    setAlloc({})
+    setXpChange(undefined)
 
     /** 按历史快照对齐本地状态：首次打开与每次重连后都走这里，多次调用结果一致 */
     const apply = (
@@ -426,9 +429,11 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     setError(undefined)
     setFreeMode(false)
     setInput('')
+    // 自由行动里手打的【场外】走场外协议（不注入、不调工具），加点不能搭这班车
+    const carryAlloc = Boolean(allocLine) && !isOffstageAsk(text)
     try {
-      await api.prompt(sessionId, allocLine ? `${text.trim()}\n${allocLine}` : text)
-      if (allocLine) setAlloc({})
+      await api.prompt(sessionId, carryAlloc ? `${text.trim()}\n${allocLine}` : text)
+      if (carryAlloc) setAlloc({})
     } catch (err) {
       setError(String(err))
     }
@@ -578,7 +583,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
             </div>
           )}
 
-          {(settlement.length > 0 || invChanges.length > 0 || (xpChange && xpChange.applied !== 0)) && !running && (
+          {(settlement.length > 0 || invChanges.length > 0 || (xpChange && (xpChange.applied !== 0 || xpChange.pointsGranted > 0))) && !running && (
             <div className="settlement">
               <span className="settlement-title">本回合结算</span>
               {xpChange && xpChange.applied !== 0 && (
@@ -593,11 +598,21 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
                   <span className="settlement-reason">{xpChange.reason}</span>
                 </div>
               )}
-              {xpChange && xpChange.pointsGranted > 0 && (
+              {xpChange && xpChange.levelAfter > xpChange.levelBefore && (
                 <div className="settlement-row levelup">
                   <b className="up">▲</b>
-                  <span className="settlement-label">升级！Lv.{xpChange.levelBefore} → Lv.{xpChange.levelAfter}</span>
-                  <span className="settlement-after">获得 {xpChange.pointsGranted} 点属性点</span>
+                  <span className="settlement-label">
+                    升级！{levelLabel(progression ?? {}, xpChange.levelBefore)} → {levelLabel(progression ?? {}, xpChange.levelAfter)}
+                  </span>
+                  <span className="settlement-after">获得 {xpChange.pointsGranted - (xpChange.bonusPoints ?? 0)} 点属性点</span>
+                </div>
+              )}
+              {xpChange && (xpChange.bonusPoints ?? 0) > 0 && (
+                <div className="settlement-row levelup">
+                  <b className="up">◆</b>
+                  <span className="settlement-label">剧情奖励</span>
+                  <span className="settlement-after">+{xpChange.bonusPoints} 点属性点（待分配）</span>
+                  {xpChange.applied === 0 && <span className="settlement-reason">{xpChange.reason}</span>}
                 </div>
               )}
               {settlement.filter((c) => {

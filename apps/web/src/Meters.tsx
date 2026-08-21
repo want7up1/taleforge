@@ -9,13 +9,18 @@ export function levelPct(p: ProgressionSnapshot): number {
   return span > 0 ? Math.min(100, Math.max(0, Math.round(((p.xp - p.prev) / span) * 100))) : 0
 }
 
-/** 顶栏等级条：Lv + 经验进度；有未分配点时亮出来，点一下开卷宗加点 */
+/** 某级的显示名：剧本给了 levelNames 用它（C/B/A…），否则 Lv.N */
+export function levelLabel(p: Pick<ProgressionSnapshot, 'levelNames'>, level: number): string {
+  return p.levelNames?.[level - 1] ?? `Lv.${level}`
+}
+
+/** 顶栏等级条：等级 + 经验进度；有未分配点时亮出来，点一下开卷宗加点 */
 export function LevelStrip({ progression, onClick }: { progression: ProgressionSnapshot; onClick: () => void }) {
   const p = progression
-  const title = `Lv.${p.level} · ${p.label} ${p.xp}${p.next !== null ? `/${p.next}` : '（满级）'}${p.unspent > 0 ? ` · 未分配 ${p.unspent} 点` : ''}`
+  const title = `${levelLabel(p, p.level)} · ${p.label} ${p.xp}${p.next !== null ? `/${p.next}` : '（满级）'}${p.unspent > 0 ? ` · 未分配 ${p.unspent} 点` : ''}`
   return (
     <button className={`level-strip${p.unspent > 0 ? ' attention' : ''}`} onClick={onClick} title={title}>
-      <span className="strip-label">Lv.{p.level}</span>
+      <span className="strip-label">{levelLabel(p, p.level)}</span>
       <span className="strip-track"><i style={{ width: `${levelPct(p)}%` }} /></span>
       <span className="strip-value">{p.next !== null ? `${p.xp}/${p.next}` : '满'}</span>
       {p.unspent > 0 && <span className="level-badge">+{p.unspent}</span>}

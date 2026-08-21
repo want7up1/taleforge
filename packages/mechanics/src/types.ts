@@ -210,6 +210,10 @@ export interface ProgressionConfig {
   thresholds: number[]
   /** 每升一级发放的属性点 */
   pointsPerLevel: number
+  /** 剧情奖励属性点的单次上限（grant_xp 的 points 参数）；0/缺省 = 不开放 */
+  bonusPointsMax?: number
+  /** 各级显示名（C/B/A/S…），长度 = 阈值数 + 1；不给则显示 Lv.N */
+  levelNames?: string[]
   /** 显示位置：strip 顶栏（缺省）/ panel 只进卷宗 */
   display?: 'strip' | 'panel'
 }
@@ -233,7 +237,10 @@ export interface XpResult {
   reason: string
   levelBefore: number
   levelAfter: number
+  /** 本次发放的属性点总数 = 升级点 + 剧情奖励点 */
   pointsGranted: number
+  /** 其中的剧情奖励点（裁过单次上限） */
+  bonusPoints: number
 }
 
 export function isXpResult(value: unknown): value is XpResult {

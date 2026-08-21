@@ -738,7 +738,7 @@ interface ProjectionValues {
   attributes?: NumericSnapshot | null
   inventory?: { items: { name: string; qty: number }[] } | null
   progress?: { actIndex: number } | null
-  progression?: { label: string; xp: number; level: number; next: number | null; unspent: number } | null
+  progression?: { label: string; xp: number; level: number; next: number | null; unspent: number; levelNames?: string[] } | null
 }
 
 /**
@@ -791,7 +791,8 @@ function panelLines(values: ProjectionValues): string[] {
   }
   const prog = values.progression
   if (prog) {
-    lines.push(`等级：Lv.${prog.level}（${prog.label} ${prog.xp}${prog.next !== null && prog.next !== undefined ? `/${prog.next}` : '，满级'}）`
+    const name = prog.levelNames?.[prog.level - 1]
+    lines.push(`等级：${name ? `${name}（Lv.${prog.level}）` : `Lv.${prog.level}`}（${prog.label} ${prog.xp}${prog.next !== null && prog.next !== undefined ? `/${prog.next}` : '，满级'}）`
       + (prog.unspent > 0 ? `，未分配属性点 ${prog.unspent}` : ''))
   }
   const attrs = [...numeric(values.attributes).values()].flat()
@@ -826,14 +827,19 @@ async function turnHeadBlock(sessionId: string, playerText: string): Promise<{ t
     // 只有开了经验等级的剧本才有 spend_points；没开的剧本即便玩家手打【加点】也不注入
     const hint = values.progression ? allocationHint(playerText, values.attributes) : undefined
     if (hint) alloc = `\n${hint}`
+    // grant_xp 的"每回合必调"也要贴在生成点旁——只写在 persona 里的机械规则，低事件回合会被跳过
+    if (values.progression) {
+      alloc += `\n【经验】grant_xp 每个正戏回合都要调（只报往回合已定稿正文换来的${values.progression.label}，没有传 0）。`
+    }
     const lines = panelLines(values)
     if (lines.length) {
       panel = `\n【当前面板】${lines.join('；')}。`
         + '面板是即时真值：正文中的装备物品必须与物品栏一致（新到手先入账再用）；'
         + '本回合的一切增减当回合结算，含每回合底噪，不许延后补账。'
     }
-  } catch {
-    // 快照拿不到就只注流程与提醒——注入永远不能挡住回合本身
+  } catch (err) {
+    // 快照拿不到就只注流程与提醒——注入永远不能挡住回合本身；但要留痕，否则加点指令静默丢失没人知道
+    console.warn(`[bff] 回合头快照拉取失败（${sessionId}）：${String(err)}`)
   }
   const reminder = reminderOf(preset, actIndex)
   return {
@@ -912,8 +918,12 @@ app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {
     const removed = pruneSessions(protect(child))
     console.log(`[bff] 重写回合：fork@${anchor} → ${child}，清除旧线 ${removed} 个`)
     const content: { type: string; text: string }[] = [{ type: 'text', text: lastUserText }]
+    // 注入块按子会话算：父会话此时已被裁掉/删除，它的面板是被弃回合的终态，不是重写起点的状态。
+    // 子会话继承父会话的 preset，先种进缓存，不依赖 session.list 是否已经列出它
+    const parentPreset = await presetOf(String(sessionId)).catch(() => undefined)
+    if (parentPreset) presetCache.set(child, parentPreset)
     if (!lastUserText.trimStart().startsWith('【场外】')) {
-      const block = await turnHeadBlock(String(sessionId), lastUserText)
+      const block = await turnHeadBlock(child, lastUserText)
       if (block) content.push(block)
     }
     await rpc('session.prompt', { sessionId: child, mode: 'queue', content })
