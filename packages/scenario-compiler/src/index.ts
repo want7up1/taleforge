@@ -32,7 +32,16 @@ export interface PluginEntries {
   mechanics?: string
   /** 幕进度引擎（底座能力，所有剧本都挂） */
   progress?: string
+  /** 全局工具遮罩（底座能力，所有剧本都挂）：挡掉 profile 层插件漏进来的全局工具 */
+  toolMask?: string
 }
+
+/**
+ * profile 层第三方插件注册在全局层、会漏进玩家回合的工具。
+ * 平台自己的工具都在 preset 作用域，不受影响也不必列这里。
+ * 装了 dsh-plugin-subscriptions 才存在这三个；没装时遮罩自动跳过。
+ */
+export const MASKED_GLOBAL_TOOLS = ['x_search', 'image_generate', 'video_generate']
 
 /** 编译单个剧本目录到 presetsRoot（幂等：整目录重建）。 */
 export function compileScenario(
@@ -63,6 +72,15 @@ export function compileScenario(
       },
     },
   ]
+
+  // 遮罩排在最前：先把全局层漏进来的工具挡掉，再挂平台自己的
+  if (entries?.toolMask) {
+    composition.push({
+      id: 'tool-mask',
+      name: entries.toolMask,
+      config: { deny: MASKED_GLOBAL_TOOLS },
+    })
+  }
 
   if (entries?.progress) {
     composition.push({

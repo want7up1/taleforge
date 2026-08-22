@@ -220,6 +220,20 @@ export interface CredentialStatus {
   writable: boolean
 }
 
+/** Grok 订阅登录状态（BFF 转 dsh-plugin-subscriptions 的 /subscriptions-auth 通道）。 */
+export interface SubscriptionStatus {
+  /** 服务器是否装了订阅登录插件；false 时设置页不显示该区块 */
+  available: boolean
+  loggedIn?: boolean
+  /** 是否有一次登录尝试正等着授权码 */
+  busy?: boolean
+  /** access token 过期时间（毫秒时间戳）；插件会自动续期 */
+  expiresAt?: number
+  account?: string
+  /** 订阅套餐，或上一次登录失败的原因 */
+  detail?: string
+}
+
 export interface ActionOption {
   key: string
   label: string
