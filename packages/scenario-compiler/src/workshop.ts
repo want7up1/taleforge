@@ -6,7 +6,6 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { stringify } from 'yaml'
-import { MASKED_GLOBAL_TOOLS } from './index.ts'
 import type { PluginEntries } from './index.ts'
 
 const WORKSHOP_PERSONA = `你是 TaleForge 的剧本工坊主持人。玩家来这里，是想从零创作一部可以立刻开玩的文字 RPG 剧本。你既是访谈者也是共作者：玩家给方向，你补血肉——设定的具体质感、人物的暗线、锚点的措辞，都该由你先写出像样的默认稿，让玩家改，而不是让玩家凭空想。
@@ -77,10 +76,6 @@ export function compileWorkshopPreset(
       name: '@deepseek-ai/dsh-persona',
       config: { text: WORKSHOP_PERSONA, complete: true, includeRuntimeContext: false },
     },
-    // 与玩家 preset 同样的全局工具遮罩：改剧本的 GM 也不该看见搜 X、生图这类工具
-    ...opts.entries?.toolMask
-      ? [{ id: 'tool-mask', name: opts.entries.toolMask, config: { deny: MASKED_GLOBAL_TOOLS } }]
-      : [],
     {
       id: 'workshop',
       name: opts.workshopEntry,

@@ -16,7 +16,7 @@ import {
 import { listVersions, publishStory, versionsDirOf } from '@taleforge/workshop'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
-import { DshRpcError, channelRpc, onMuxFrame, rpc } from './dsh.ts'
+import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
 import { startObserver } from './observer.ts'
 
 const PORT = Number(process.env.PORT ?? 31415)
@@ -32,7 +32,6 @@ mkdirSync(scenariosRoot, { recursive: true })
 const entries = {
   mechanics: path.join(repoRoot, 'packages/mechanics/src/index.ts'),
   progress: path.join(repoRoot, 'packages/progress/src/index.ts'),
-  toolMask: path.join(repoRoot, 'packages/tool-mask/src/index.ts'),
 }
 const compiled = compileAll([path.join(repoRoot, 'presets'), scenariosRoot], presetsRoot, entries)
 compileWorkshopPreset(presetsRoot, {
@@ -154,85 +153,6 @@ app.put('/app/sessions/:id/model', asyncRoute(async (req, res) => {
     })
   }
   res.json(result)
-}))
-
-/** 全局模型目录：登录订阅后新 provider 的模型会自动出现在这里，设置页据此渲染，不写死清单。 */
-app.get('/app/settings/models', asyncRoute(async (_req, res) => {
-  res.json(await rpc('llm.models', {}))
-}))
-
-// ---- 设置：Grok 订阅登录 ----
-// 走 dsh-plugin-subscriptions 注册的 /subscriptions-auth 通道（OAuth 授权码 + PKCE）。
-// 令牌由插件自己存进 DSH_HOME/plugins/subscriptions/auth.json（0600、随数据卷持久化、到期自动刷新），
-// BFF 只做转发，不碰也不落任何令牌。插件没装时通道答 405，这里统一降级成 available:false。
-
-const SUBSCRIPTION_CHANNEL = '/subscriptions-auth'
-/** 本平台只用 Grok 订阅；插件同时支持 codex/claude，不在这里暴露。 */
-const SUBSCRIPTION_PROVIDER = 'grok'
-
-interface ProviderStatus {
-  loggedIn: boolean
-  busy: boolean
-  expiresAt?: number
-  account?: string
-  detail?: string
-}
-
-/** 通道调用的统一降级：插件未装时不报错，让设置页把入口藏起来。 */
-async function subscriptionCall<T>(endpoint: string, payload: unknown): Promise<T | undefined> {
-  try {
-    return await channelRpc<T>(SUBSCRIPTION_CHANNEL, endpoint, payload)
-  } catch (err) {
-    if (err instanceof DshRpcError && err.code === 'channel-unavailable') return undefined
-    throw err
-  }
-}
-
-app.get('/app/settings/subscription', asyncRoute(async (_req, res) => {
-  const value = await subscriptionCall<{ providers: Record<string, ProviderStatus> }>('status', {})
-  if (!value) {
-    res.json({ available: false })
-    return
-  }
-  res.json({ available: true, ...(value.providers[SUBSCRIPTION_PROVIDER] ?? { loggedIn: false, busy: false }) })
-}))
-
-/** 发起登录：立即返回授权链接，插件在后台等回调（默认 3 分钟）。 */
-app.post('/app/settings/subscription/login', asyncRoute(async (_req, res) => {
-  const value = await subscriptionCall<{ authorizeUrl: string }>('login', { provider: SUBSCRIPTION_PROVIDER })
-  if (!value) {
-    res.status(409).json({ error: { code: 'plugin-missing', message: '服务器未安装订阅登录插件' } })
-    return
-  }
-  res.json(value)
-}))
-
-/**
- * 兜底通道：回调地址指向 dsh 所在机器的 127.0.0.1:56121，浏览器在别的机器上就到不了。
- * 把授权后地址栏里的整条 URL（或其中的 code）贴回来，一样能完成兑换。
- */
-app.post('/app/settings/subscription/manual', asyncRoute(async (req, res) => {
-  const input = String((req.body ?? {}).input ?? '').trim()
-  if (!input) {
-    res.status(400).json({ error: { code: 'empty-input', message: '请粘贴回调 URL 或授权码' } })
-    return
-  }
-  const value = await subscriptionCall<{ ok: true }>('manual', { provider: SUBSCRIPTION_PROVIDER, input })
-  if (!value) {
-    res.status(409).json({ error: { code: 'plugin-missing', message: '服务器未安装订阅登录插件' } })
-    return
-  }
-  res.json(value)
-}))
-
-app.post('/app/settings/subscription/cancel', asyncRoute(async (_req, res) => {
-  await subscriptionCall('cancel', { provider: SUBSCRIPTION_PROVIDER })
-  res.json({ ok: true })
-}))
-
-app.delete('/app/settings/subscription', asyncRoute(async (_req, res) => {
-  await subscriptionCall('logout', { provider: SUBSCRIPTION_PROVIDER })
-  res.json({ ok: true })
 }))
 
 // ---- 会话管理 ----
@@ -779,36 +699,6 @@ app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
  */
 const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress——每一回合都要调，只报往回合正文里已经达成的锚点（本回合才打算写的不算，下回合再报），无进展传空数组；有机制面板则接着用相应工具把本回合的全部变化结清；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
 
-/**
- * 模型适配层：同一套 persona 在不同模型上的实测差异，按当前会话的 provider 现挑现注。
- * 放在【回合流程】之前（与实测时的相对位置一致），不进 persona——preset 在会话创建时
- * 锁定，而模型可以中途切换，写进 persona 会让两者对不上；放这里还能免掉 DeepSeek 的
- * 无谓约束（护栏 2：硬性禁令保持个位数）。不同模型本来就不共享 prefix cache，按模型
- * 分叉在这一层是免费的。
- *
- * grok：实测 grok-4.5 有六成概率把工具调用当正文写出来——```html 包着的函数调用文本，
- * 参数全对却不发 tool_call，于是整回合既没有正文也没有行动块，玩家只能打"继续"。
- * 用真实 persona 与工具定义直连重放：不加约束 5 次里 3 次翻车（与流式无关，是随机的），
- * 加上这段后连测 5/5 正常。新模型上架时照此流程实测，别照抄别的模型的病历。
- */
-const PROVIDER_QUIRKS: Record<string, string> = {
-  grok: '【调用方式】report_progress、grant_xp、adjust_resources 等是真正的函数工具，'
-    + '必须用工具调用功能发出。绝不把调用写成正文里的文字或代码块——'
-    + '正文里出现函数名、花括号参数或代码围栏，这一回合就是废的。\n',
-}
-
-/** 当前会话实际在跑的 provider 对应的适配段；模型可中途切换，所以每回合现取不缓存。 */
-async function quirkOf(sessionId: string): Promise<string> {
-  try {
-    const { current } = await rpc<{ current?: { provider?: string } }>('session.models', { sessionId })
-    return (current?.provider ? PROVIDER_QUIRKS[current.provider] : undefined) ?? ''
-  } catch (err) {
-    // 拿不到就不注入——注入永远不能挡住回合本身
-    console.warn(`[bff] 模型适配段取用失败（${sessionId}）：${String(err)}`)
-    return ''
-  }
-}
-
 const presetCache = new Map<string, string | undefined>()
 async function presetOf(sessionId: string): Promise<string | undefined> {
   if (presetCache.has(sessionId)) return presetCache.get(sessionId)
@@ -952,10 +842,9 @@ async function turnHeadBlock(sessionId: string, playerText: string): Promise<{ t
     console.warn(`[bff] 回合头快照拉取失败（${sessionId}）：${String(err)}`)
   }
   const reminder = reminderOf(preset, actIndex)
-  const quirk = await quirkOf(sessionId)
   return {
     type: 'text',
-    text: `\n\n${quirk}${TURN_FLOW_REMINDER}${alloc}${panel}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
+    text: `\n\n${TURN_FLOW_REMINDER}${alloc}${panel}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
   }
 }
 

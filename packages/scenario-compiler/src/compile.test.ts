@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { MASKED_GLOBAL_TOOLS, applyRevisionsToStory, compileAll, compileScenario, compileWorkshopPreset, renderPersona, storySchema } from './index.ts'
+import { applyRevisionsToStory, compileAll, compileScenario, compileWorkshopPreset, renderPersona, storySchema } from './index.ts'
 
 const story = {
   format: 'taleforge.story.v1',
@@ -358,49 +358,4 @@ test('progression：levelNames 长度必须等于阈值数+1；bonusPointsMax �
   const persona = renderPersona(rich)
   assert.match(persona, /各级名称 C\/B\/A；B（2 级）需累计 6、A（3 级）需累计 16，满级 3 级=A/)
   assert.match(persona, /剧情奖励属性点.*points.*单次最多 5/)
-})
-
-test('工具遮罩进玩家与工坊 preset：挡掉 profile 层插件漏进来的全局工具（护栏 4）', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const src = path.join(root, 'src')
-    const out = path.join(root, 'out')
-    mkdirSync(src, { recursive: true })
-    writeFileSync(path.join(src, 'story.json'), JSON.stringify(story))
-    const entries = { toolMask: '/abs/tool-mask.ts', progress: '/abs/progress.ts' }
-
-    compileScenario(src, out, entries)
-    const composition = readFileSync(path.join(out, 'story-test', 'agent.cordis.yml'), 'utf8')
-    assert.match(composition, /id: tool-mask/)
-    for (const tool of MASKED_GLOBAL_TOOLS) {
-      assert.ok(composition.includes(tool), `玩家 preset 应挡掉 ${tool}`)
-    }
-    // 遮罩必须排在平台自己的插件之前，先挡再挂
-    assert.ok(
-      composition.indexOf('id: tool-mask') < composition.indexOf('id: progress'),
-      '遮罩应排在其他插件之前',
-    )
-
-    compileWorkshopPreset(out, { workshopEntry: '/abs/workshop.ts', scenariosRoot: src, entries })
-    const workshop = readFileSync(path.join(out, 'workshop', 'agent.cordis.yml'), 'utf8')
-    assert.match(workshop, /id: tool-mask/, '工坊 preset 同样要挡')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('没有 toolMask 入口时不写遮罩条目：同一份编译器在未装插件的环境照常工作', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const src = path.join(root, 'src')
-    const out = path.join(root, 'out')
-    mkdirSync(src, { recursive: true })
-    writeFileSync(path.join(src, 'story.json'), JSON.stringify(story))
-
-    compileScenario(src, out, { progress: '/abs/progress.ts' })
-    const composition = readFileSync(path.join(out, 'story-test', 'agent.cordis.yml'), 'utf8')
-    assert.ok(!composition.includes('tool-mask'))
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
 })
