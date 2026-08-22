@@ -32,16 +32,34 @@ interface RpcResultErr {
 }
 
 export async function rpc<T>(method: string, payload: unknown): Promise<T> {
+  return post(`/api/${method}`, method, payload)
+}
+
+/**
+ * 插件自注册的 RPC 通道（如 dsh-plugin-subscriptions 的 `/subscriptions-auth`）。
+ * 与 `/api/<method>` 是两套路由：通道名本身就是路径前缀，endpoint 接在后面，
+ * 信封仍是 client-request。通道以 `authority: 'loopback'` 注册，BFF 与 dsh 同进程空间满足。
+ * 插件没装时该路径没有 POST 处理器，dsh 落到静态兜底答 405（实测），这里翻成
+ * `channel-unavailable` 供上层降级——设置页据此隐藏入口，而不是报错。
+ */
+export async function channelRpc<T>(channel: string, endpoint: string, payload: unknown): Promise<T> {
+  return post(`${channel}/${endpoint}`, endpoint, payload)
+}
+
+async function post<T>(path: string, method: string, payload: unknown): Promise<T> {
   const rpcId = randomUUID()
   let res: Response
   try {
-    res = await fetch(`${DSH_BASE}/api/${method}`, {
+    res = await fetch(`${DSH_BASE}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
     })
   } catch (cause) {
     throw new DshRpcError('dsh-unreachable', `dsh 网关无法访问（${DSH_BASE}）：${String(cause)}`)
+  }
+  if (res.status === 404 || res.status === 405) {
+    throw new DshRpcError('channel-unavailable', `dsh 没有这条路由：${path}（插件未安装？）`)
   }
   if (!res.ok) {
     throw new DshRpcError('transport', `dsh ${method}: HTTP ${res.status} ${await res.text().catch(() => '')}`)

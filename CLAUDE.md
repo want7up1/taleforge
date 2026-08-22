@@ -134,6 +134,35 @@ agent 只知道"这里不行"而不知道正确出路时，会向玩家把工具
 
 **规律**：凡是留给 GM 判断"够不够格"的规则，它一律选择不做。给类型、给数字、给固定流程。
 
+## 订阅登录（Grok）与全局工具污染
+
+用 SuperGrok / X Premium 订阅额度跑游戏，走第三方插件 `dsh-plugin-subscriptions`（非官方，MIT，单人维护）：
+`dsh plugin --profile web add dsh-plugin-subscriptions` 装进 profile（profile 在 DSH_HOME 里，随数据卷持久化，装一次即可）。
+
+- 授权入口在**本平台设置页**（不是 dsh 自带工作台）：BFF 转发插件注册的 `/subscriptions-auth` 通道。
+  该通道与 `/api/<method>` 是两套路由——形式是 `POST /<channel>/<endpoint>`，信封仍是 client-request；
+  **插件没装时 dsh 对这个路径答 405**（不是 404），BFF 据此降级成 `available:false`，设置页把整块藏起来。
+- 流程是 authorization code + PKCE，回调硬编码 `127.0.0.1:56121`——那是 **dsh 所在机器**的 loopback，
+  浏览器在别的机器上根本到不了。所以设置页必须保留"粘贴回调 URL"的兜底通道（插件 UI 自己也有这一手）。
+  别为此去开 56121 的端口映射：它落在该机 32768–60999 的临时端口区间里，正是要避开的范围。
+- 令牌由插件存 `DSH_HOME/plugins/subscriptions/auth.json`（0600、原子写、到期自动刷新），BFF 不碰也不落任何令牌。
+- 模型目录改成向 `llm.models` 现拉（`GET /app/settings/models`），登录后 Grok 分组自动出现，设置页不写死清单。
+
+**踩到的坑：profile 层插件会往全局工具层注册工具，一路漏进玩家回合。** dsh 的工具可见性解析链是
+`agent → preset → global`，平台自己的工具（机制/进度/工坊）都注册在 preset 作用域、跟着声明走，
+但第三方插件是在 profile 层 apply 的，它注册的工具进的是全局层。实测：装上订阅插件后，baseline 剧本
+的回合里凭空多出 `x_search` / `image_generate` / `video_generate` 三个（11 个工具，其中 3 个是它的），
+而且**不登录就已经在了**——GM 随时可能拿去搜 X 或生图，护栏 4 直接破。
+
+对策是 `packages/tool-mask`：编译器给每个玩家 preset 与工坊 preset 排在最前面挂一条遮罩，
+调 `ctx.tools.restrict()` 把这些全局工具挡掉（实测 11 → 8，机制工具全在）。两个细节别改坏：
+- **只能用 `deny` 不能用 `allow`**：restrict 的两种语义都只作用于全局工具，而要留下的机制工具全在
+  preset 作用域，allow 列表里写它们会被判为 unknown/scope-local 而报错。
+- **逐个 deny，未注册的吞掉**：restrict 遇到不存在的工具名会抛错，而同一份 preset 要在装了插件和
+  没装插件的机器上都能加载，不能因为某个名字不在就让整个 preset 加载失败。
+
+装新的 profile 层插件时，先跑一局看 `request/header.tools` 里多了什么，多的都要进遮罩名单。
+
 ## 机制引擎（packages/mechanics）
 
 - **本地插件加载已验证可行**：dsh 能按绝对路径加载本仓库的插件，且**直接吃 `.ts` 源码，无需构建步骤**，`ctx.tools` 等服务正常注入。
