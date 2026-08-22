@@ -20,10 +20,12 @@ export function textOfBlocks(blocks: unknown): string {
 
 export function messageOfEvent(event: SessionEvent): ChatMessage | undefined {
   if (event.type === 'user/message') {
-    // user/message 的 data 本身就是 UserMessage；回合头注入块（【回合流程】）是
-    // 平台给 GM 的机械提醒，不是玩家的话，界面上剥掉
+    // user/message 的 data 本身就是 UserMessage；回合头注入块是平台给 GM 的机械提醒，
+    // 不是玩家的话，界面上剥掉。用 includes 而不是 startsWith：注入块开头会随模型适配段
+    // （PROVIDER_QUIRKS）变化——曾因适配段拼在【回合流程】之前，整块前缀变成【调用方式】，
+    // 前缀判断落空，一整段提醒直接显示给了玩家。认标记不认位置，加新适配段就不必再动这里。
     const blocks = Array.isArray(event.data.content)
-      ? event.data.content.filter(b => !(typeof b.text === 'string' && b.text.trimStart().startsWith('【回合流程】')))
+      ? event.data.content.filter(b => !(typeof b.text === 'string' && b.text.includes('【回合流程】')))
       : event.data.content
     const text = textOfBlocks(blocks)
     if (text) return { role: 'user', text, seq: event.seq }

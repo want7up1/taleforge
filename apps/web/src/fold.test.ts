@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { historyBoundary, lastSeqOf, mergeMessages, planResume } from './fold.ts'
+import { historyBoundary, lastSeqOf, mergeMessages, messageOfEvent, planResume } from './fold.ts'
 import type { ChatMessage, HistoryEntry } from './types.ts'
 
 const ev = (seq: number, type: string, data: Record<string, unknown> = {}): HistoryEntry =>
@@ -88,4 +88,27 @@ test('planResume：拉取窗口内实时流开了新回合 → 保持生成中�
   assert.equal(plan.startedMeanwhile, true)
   assert.equal(plan.resumedInflight, false)
   assert.equal(plan.streaming, '新回合')
+})
+
+test('回合头注入块永不显示给玩家——认【回合流程】标记，不认它在不在开头', () => {
+  const player = { type: 'text', text: 'A. 拔刀' }
+  const flow = { type: 'text', text: '\n\n【回合流程】先调 report_progress……' }
+  // 模型适配段（PROVIDER_QUIRKS）会拼在【回合流程】之前，整块首字符因此不再是【回合流程】
+  const quirked = { type: 'text', text: '\n\n【调用方式】必须用工具调用功能发出。\n【回合流程】先调 report_progress……' }
+
+  for (const [label, block] of [['纯流程块', flow], ['带适配段', quirked]] as const) {
+    const msg = messageOfEvent({
+      type: 'user/message', seq: 1, time: 0,
+      data: { content: [player, block] },
+    } as never)
+    assert.equal(msg?.text, 'A. 拔刀', `${label}：只应留下玩家自己的话`)
+  }
+})
+
+test('玩家自己的话不因含标记以外的方括号被吞掉', () => {
+  const msg = messageOfEvent({
+    type: 'user/message', seq: 2, time: 0,
+    data: { content: [{ type: 'text', text: '【场外】这里的机制怎么算？' }] },
+  } as never)
+  assert.equal(msg?.text, '【场外】这里的机制怎么算？')
 })
