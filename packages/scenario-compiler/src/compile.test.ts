@@ -404,3 +404,28 @@ test('没有 toolMask 入口时不写遮罩条目：同一份编译器在未装�
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('投影 key 按剧本分片：每部剧本的机制与进度都带自己的 scope', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const src = path.join(root, 'src')
+    const out = path.join(root, 'out')
+    mkdirSync(src, { recursive: true })
+    writeFileSync(path.join(src, 'story.json'), JSON.stringify({
+      ...story,
+      mechanics: {
+        resources: [{
+          id: 'hp', label: '体力', group: 'self',
+          min: 0, max: 100, initial: 50, maxStep: 10, guidance: '说明',
+        }],
+      },
+    }))
+    compileScenario(src, out, { progress: '/abs/p.ts', mechanics: '/abs/m.ts' })
+    const yml = readFileSync(path.join(out, 'story-test', 'agent.cordis.yml'), 'utf8')
+    // dsh 的投影 registry 全局按 key 唯一、同 key 共享一个 unit（它假定同构）；
+    // 各剧本的 defs 并不同构，没有 scope 就会串剧本——实测出现过 A 剧本的会话拿到 B 剧本的面板
+    assert.equal((yml.match(/scope: story-test/g) ?? []).length, 2, '机制与进度各带一个 scope')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

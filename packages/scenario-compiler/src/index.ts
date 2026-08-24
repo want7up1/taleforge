@@ -87,6 +87,9 @@ export function compileScenario(
       id: 'progress',
       name: entries.progress,
       config: {
+        // 投影 key 按剧本分片：dsh 的投影 registry 全局按 key 唯一，同 key 的注册者共享
+        // 一个 unit（它假定同构），而各剧本的幕结构与数值定义并不同构
+        scope: story.id,
         acts: story.acts,
         cast: story.cast.map(c => ({ id: c.id, name: c.name })),
         // 数值条目名录：供场外修订（resource/attribute 目标）的校验、显示与边界联动提醒
@@ -102,8 +105,8 @@ export function compileScenario(
     composition.push({
       id: 'mechanics',
       name: entries.mechanics,
-      // 整段声明原样交给机制引擎，声明哪个模块就注册哪个模块
-      config: story.mechanics,
+      // 整段声明原样交给机制引擎，声明哪个模块就注册哪个模块；scope 让投影 key 按剧本分片
+      config: { ...story.mechanics, scope: story.id },
     })
   }
 

@@ -183,11 +183,23 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
       setMessages(prev => mergeMessages(foldHistory(events), prev, plan.boundary))
       // 打开存档时立刻还原数值、幕进度与最近一回合的机制事件，不必等下一回合
       const values = projections?.values
-      if (values?.mechanics) setMechanics(values.mechanics)
-      if (values?.attributes) setAttributes(values.attributes)
-      if (values?.inventory) setInventory(values.inventory)
-      if (values?.progress) setProgress(values.progress)
-      if (values?.progression) setProgression(values.progression)
+      // 投影 key 按剧本分片成 `base:剧本id`，认前缀不认全等（裸 key 兼容旧存档）
+      const pick = <T,>(base: string): T | undefined => {
+        const all = (values ?? {}) as Record<string, unknown>
+        if (all[base]) return all[base] as T
+        const k = Object.keys(all).find(x => x.startsWith(`${base}:`) && all[x])
+        return k ? (all[k] as T) : undefined
+      }
+      const mech = pick<MechanicsSnapshot>('mechanics')
+      if (mech) setMechanics(mech)
+      const attrs = pick<AttributesSnapshot>('attributes')
+      if (attrs) setAttributes(attrs)
+      const inv = pick<InventorySnapshot>('inventory')
+      if (inv) setInventory(inv)
+      const prog = pick<ProgressSnapshot>('progress')
+      if (prog) setProgress(prog)
+      const progression = pick<ProgressionSnapshot>('progression')
+      if (progression) setProgression(progression)
       if (values?.sessionStats) setStats(values.sessionStats)
       // 本回合结算卡：拉取窗口内已开了新回合的话，帧处理器正在累积，不用快照盖掉
       if (!plan.startedMeanwhile) {
@@ -240,28 +252,33 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
       onLive: reconnect => void sync(!reconnect),
       onFrame: (raw) => {
         const frame = JSON.parse(raw.data) as MuxFrame
-        if (frame.type === 'session/projection' && frame.key === 'sessionStats') {
-          setStats(frame.value as SessionStats)
-          return
-        }
-        if (frame.type === 'session/projection' && frame.key === 'mechanics') {
-          setMechanics(frame.value as MechanicsSnapshot)
-          return
-        }
-        if (frame.type === 'session/projection' && frame.key === 'attributes') {
-          setAttributes(frame.value as AttributesSnapshot)
-          return
-        }
-        if (frame.type === 'session/projection' && frame.key === 'inventory') {
-          setInventory(frame.value as InventorySnapshot)
-          return
-        }
-        if (frame.type === 'session/projection' && frame.key === 'progress') {
-          setProgress(frame.value as ProgressSnapshot)
-          return
-        }
-        if (frame.type === 'session/projection' && frame.key === 'progression') {
-          setProgression(frame.value as ProgressionSnapshot)
+        if (frame.type === 'session/projection') {
+          // key 形如 `mechanics:story-xxx`（按剧本分片），取冒号前的域名分派
+          const base = String(frame.key ?? '').split(':')[0]
+          if (base === 'sessionStats') {
+            setStats(frame.value as SessionStats)
+            return
+          }
+          if (base === 'mechanics') {
+            setMechanics(frame.value as MechanicsSnapshot)
+            return
+          }
+          if (base === 'attributes') {
+            setAttributes(frame.value as AttributesSnapshot)
+            return
+          }
+          if (base === 'inventory') {
+            setInventory(frame.value as InventorySnapshot)
+            return
+          }
+          if (base === 'progress') {
+            setProgress(frame.value as ProgressSnapshot)
+            return
+          }
+          if (base === 'progression') {
+            setProgression(frame.value as ProgressionSnapshot)
+            return
+          }
           return
         }
         if (frame.type !== 'session/event' || !frame.event) return

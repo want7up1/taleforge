@@ -51,16 +51,23 @@ const progressViewSchema = z.object({
 
 export type ProgressView = z.infer<typeof progressViewSchema>
 
+// 每部剧本占自己的 key，理由见 packages/mechanics 的同名声明。
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
     /** 幕进度快照：当前幕、锚点达成、压力、终局态、现行修订 */
     progress: ProgressView | null
+    [key: `progress:${string}`]: ProgressView | null
   }
 }
 
 export interface Config {
   /** 幕结构种子，由剧本编译器写入 */
   acts: ActDef[]
+  /**
+   * 投影 key 的剧本分片（剧本 id）。dsh 的投影 registry 全局按 key 唯一，同 key 的
+   * 注册者共享一个 unit——它假定同构，而各剧本的幕结构不同构。详见 packages/mechanics 同名字段。
+   */
+  scope?: string
   /** 出场人物名录，供修订校验与显示 */
   cast?: { id: string; name: string }[]
   /** 机制条目名录（资源/属性），供数值定义修订的校验、显示与边界联动提醒 */
@@ -233,7 +240,7 @@ export function apply(ctx: Context, config: Config) {
 
   ctx.inject(['sessionProjections'], (projectionCtx: Context) => {
     projectionCtx.sessionProjections.register({
-      key: 'progress',
+      key: config.scope ? (`progress:${config.scope}` as const) : 'progress',
       schema: progressViewSchema,
       init: () => initialProgress(),
       // 不认识的事件必须原样返回同一引用，registry 靠 Object.is 判断有没有变化

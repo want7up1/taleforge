@@ -121,16 +121,27 @@ const progressionSchema = z.object({
   display: z.enum(['strip', 'panel']).optional(),
 })
 
+/** 玩家可见的资源快照 */
+export type MechanicsProjection = { defs: ResourceDef[]; state: ResourceState; groups?: GroupTitles } | null
+/** 属性表快照 */
+export type AttributesProjection = { defs: Omit<AttributeDef, 'guidance'>[]; state: ResourceState } | null
+/** 物品栏快照 */
+export type InventoryProjection = { items: { id: string; name: string; qty: number; note?: string }[] } | null
+/** 经验与等级快照：等级、经验、未分配属性点 */
+export type ProgressionProjection = ProgressionView | null
+
+// 每部剧本占自己的 key（`base:剧本id`），否则先 mount 的剧本会把后来者的 defs 顶掉；
+// 裸 key 保留，兼容单剧本部署与旧存档。
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
-    /** 玩家可见的资源快照 */
-    mechanics: { defs: ResourceDef[]; state: ResourceState; groups?: GroupTitles } | null
-    /** 属性表快照 */
-    attributes: { defs: Omit<AttributeDef, 'guidance'>[]; state: ResourceState } | null
-    /** 物品栏快照 */
-    inventory: { items: { id: string; name: string; qty: number; note?: string }[] } | null
-    /** 经验与等级快照：等级、经验、未分配属性点 */
-    progression: ProgressionView | null
+    mechanics: MechanicsProjection
+    attributes: AttributesProjection
+    inventory: InventoryProjection
+    progression: ProgressionProjection
+    [key: `mechanics:${string}`]: MechanicsProjection
+    [key: `attributes:${string}`]: AttributesProjection
+    [key: `inventory:${string}`]: InventoryProjection
+    [key: `progression:${string}`]: ProgressionProjection
   }
 }
 
@@ -143,6 +154,23 @@ export interface Config {
   progression?: ProgressionConfig
   /** 侧栏分组标题自定义（strip/panel/hidden 的选位在各资源的 display 字段上） */
   groups?: GroupTitles
+  /**
+   * 投影 key 的剧本分片（由编译器写入剧本 id）。
+   *
+   * dsh 的投影 registry 是**全局按 key 唯一**的，官方语义是"同 key 的注册者共享一个 unit
+   * 并计数：同一个工具包挂在 N 个 preset 上就注册 N 次，key 活到最后一个卸载"——它假定
+   * 这 N 个注册是**同构**的。而本插件的 defs 与初值来自各剧本自己的 config（闭包），
+   * N 部剧本并不同构：先 mount 的那部赢，后 mount 的整份 defs 被它顶掉。
+   * 实测后果：荻湾庄的会话每回合拿到澜心岛的面板（姜棠/苏晚晴/手枪/罐头），
+   * 前端结算卡片也因为查不到 label 而裸奔出 grain / fuel 这样的 id。
+   * 所以每部剧本必须占自己的 key。
+   */
+  scope?: string
+}
+
+/** 投影 key：有剧本分片就用 `base:剧本id`，没有则退回裸 key（兼容单剧本与旧存档）。 */
+function projectionKey<B extends string>(base: B, scope?: string): B | `${B}:${string}` {
+  return scope ? `${base}:${scope}` : base
 }
 
 export const name = 'taleforge-mechanics'
@@ -488,7 +516,7 @@ export function apply(ctx: Context, config: Config) {
   ctx.inject(['sessionProjections'], (projectionCtx: Context) => {
     if (resources.length) {
       projectionCtx.sessionProjections.register({
-        key: 'mechanics',
+        key: projectionKey('mechanics', config.scope),
         schema: mechanicsSchema,
         init: (): NumericProjState => ({ values: initialState(resources), revisions: [] }),
         // 不认识的事件必须原样返回同一引用，registry 靠 Object.is 判断有没有变化
@@ -504,7 +532,7 @@ export function apply(ctx: Context, config: Config) {
     }
     if (attributes.length) {
       projectionCtx.sessionProjections.register({
-        key: 'attributes',
+        key: projectionKey('attributes', config.scope),
         schema: attributesSchema,
         init: (): NumericProjState => ({ values: initialState(attributes), revisions: [] }),
         apply: (state: NumericProjState, event: { type: string; data: unknown }) =>
@@ -519,7 +547,7 @@ export function apply(ctx: Context, config: Config) {
     }
     if (inventory) {
       projectionCtx.sessionProjections.register({
-        key: 'inventory',
+        key: projectionKey('inventory', config.scope),
         schema: inventorySchema,
         init: () => initialInventory(inventory.initial),
         apply: (state: InventoryState, event: { type: string; data: unknown }) => {
@@ -538,7 +566,7 @@ export function apply(ctx: Context, config: Config) {
     }
     if (progression) {
       projectionCtx.sessionProjections.register({
-        key: 'progression',
+        key: projectionKey('progression', config.scope),
         schema: progressionSchema,
         init: (): ProgressionState => initialProgression(),
         // reduceProgression 对不认识的 meta 原样返回同一引用

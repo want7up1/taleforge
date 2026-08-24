@@ -862,6 +862,21 @@ interface ProjectionValues {
   inventory?: { items: { name: string; qty: number }[] } | null
   progress?: { actIndex: number } | null
   progression?: { label: string; xp: number; level: number; next: number | null; unspent: number; levelNames?: string[] } | null
+  [key: string]: unknown
+}
+
+/**
+ * 取一个投影值：投影 key 按剧本分片成 `base:剧本id`（否则 dsh 全局唯一的 key 会让
+ * 先 mount 的剧本顶掉后来者的 defs——实测荻湾庄的会话拿到过澜心岛的面板）。
+ * 认前缀不认全等，裸 key 仍然接受，兼容单剧本部署与旧存档。
+ */
+function projectionOf<T>(values: ProjectionValues, base: string): T | undefined {
+  const direct = values[base]
+  if (direct) return direct as T
+  for (const [k, v] of Object.entries(values)) {
+    if (v && k.startsWith(`${base}:`)) return v as T
+  }
+  return undefined
 }
 
 /**
@@ -912,21 +927,22 @@ function panelLines(values: ProjectionValues): string[] {
     }
     return byGroup
   }
-  const prog = values.progression
+  const prog = projectionOf<ProjectionValues['progression']>(values, 'progression')
   if (prog) {
     const name = prog.levelNames?.[prog.level - 1]
     lines.push(`等级：${name ? `${name}（Lv.${prog.level}）` : `Lv.${prog.level}`}（${prog.label} ${prog.xp}${prog.next !== null && prog.next !== undefined ? `/${prog.next}` : '，满级'}）`
       + (prog.unspent > 0 ? `，未分配属性点 ${prog.unspent}` : ''))
   }
-  const attrs = [...numeric(values.attributes).values()].flat()
+  const attrs = [...numeric(projectionOf<NumericSnapshot>(values, 'attributes')).values()].flat()
   if (attrs.length) lines.push(`属性：${attrs.join(' ')}`)
   const groupTitle = { self: '自身', affinity: '好感', world: '队伍' } as const
-  for (const [group, parts] of numeric(values.mechanics)) {
-    const title = values.mechanics?.groups?.[group as keyof typeof groupTitle]
+  const mech = projectionOf<NumericSnapshot>(values, 'mechanics')
+  for (const [group, parts] of numeric(mech)) {
+    const title = mech?.groups?.[group as keyof typeof groupTitle]
       ?? groupTitle[group as keyof typeof groupTitle] ?? group
     lines.push(`${title}：${parts.join(' ')}`)
   }
-  const items = values.inventory?.items ?? []
+  const items = projectionOf<{ items: { name: string; qty: number }[] }>(values, 'inventory')?.items ?? []
   if (items.length) {
     lines.push(`物品栏：${items.map(i => (i.qty > 1 ? `${i.name}×${i.qty}` : i.name)).join('、')}`)
   }
@@ -946,13 +962,16 @@ async function turnHeadBlock(sessionId: string, playerText: string): Promise<{ t
       { sessionId, maxMessages: 1 },
     )
     const values = history.projections?.values ?? {}
-    actIndex = values.progress?.actIndex
+    actIndex = projectionOf<{ actIndex: number }>(values, 'progress')?.actIndex
     // 只有开了经验等级的剧本才有 spend_points；没开的剧本即便玩家手打【加点】也不注入
-    const hint = values.progression ? allocationHint(playerText, values.attributes) : undefined
+    const hint = projectionOf(values, 'progression')
+      ? allocationHint(playerText, projectionOf<NumericSnapshot>(values, 'attributes'))
+      : undefined
     if (hint) alloc = `\n${hint}`
     // grant_xp 的"每回合必调"也要贴在生成点旁——只写在 persona 里的机械规则，低事件回合会被跳过
-    if (values.progression) {
-      alloc += `\n【经验】grant_xp 每个正戏回合都要调（只报往回合已定稿正文换来的${values.progression.label}，没有传 0）。`
+    const progression = projectionOf<ProjectionValues['progression']>(values, 'progression')
+    if (progression) {
+      alloc += `\n【经验】grant_xp 每个正戏回合都要调（只报往回合已定稿正文换来的${progression.label}，没有传 0）。`
     }
     const lines = panelLines(values)
     if (lines.length) {
