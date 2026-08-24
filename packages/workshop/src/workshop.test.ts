@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { listStories, listVersions, publishStory, readStory } from './index.ts'
+import { craftWarnings, listStories, listVersions, publishStory, readStory } from './index.ts'
+import { storySchema } from '@taleforge/scenario-compiler'
 
 const story = {
   format: 'taleforge.story.v1',
@@ -111,4 +112,68 @@ test('list_stories/read_story：只认 story- 前缀，读的是现行正式版�
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('写法体检：判断型触发条件被指名报出，且不影响发布', () => {
+  const vague = {
+    ...story,
+    craft: {
+      ...story.craft,
+      rules: [
+        '结算铁律：每次战斗结束必须落账',          // 机械条件，不该报
+        '氛围铁律：当写到据点日常时，必须出现烟火气', // 判断条件，该报
+      ],
+    },
+  }
+  const notes = craftWarnings(storySchema.parse(vague))
+  assert.equal(notes.length, 1, '只报判断型那条')
+  assert.match(notes[0], /craft\.rules\[1\]/)
+  assert.match(notes[0], /日常时/)
+})
+
+test('写法体检：人物设定里的现在时会被点出（时序错位+剧透）', () => {
+  const tensed = {
+    ...story,
+    cast: [{ id: 'npc-1', name: '甲', identity: '女匪头目。现在她是据点防务的头儿。' }],
+  }
+  const notes = craftWarnings(storySchema.parse(tensed))
+  assert.equal(notes.length, 1)
+  assert.match(notes[0], /cast\.npc-1\.identity/)
+  assert.match(notes[0], /现在/)
+})
+
+test('写法体检：干净的剧本不报任何提醒，发布结果里也不带 warnings', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const config = { scenariosRoot: path.join(root, 'scenarios'), presetsRoot: path.join(root, 'presets') }
+    assert.deepEqual(craftWarnings(storySchema.parse(story)), [])
+    const result = publishStory(config, story)
+    assert.equal(result.ok, true)
+    assert.equal(result.warnings, undefined)
+    assert.ok(!result.brief.includes('写法体检'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('写法体检不拦截发布：有问题照样发布成功，提醒附在 brief 里', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const config = { scenariosRoot: path.join(root, 'scenarios'), presetsRoot: path.join(root, 'presets') }
+    const vague = { ...story, craft: { ...story.craft, rules: ['必要时补充设定'] } }
+    const result = publishStory(config, vague)
+    assert.equal(result.ok, true, '体检永远不拦截发布')
+    assert.equal(result.warnings?.length, 1)
+    assert.match(result.brief, /写法体检/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('写法体检不误报：时间词对比的是世界变迁而非人物归属', () => {
+  const fine = {
+    ...story,
+    cast: [{ id: 'npc-2', name: '乙', identity: '前顶流偶像明星，如今素面朝天依然美得发光。' }],
+  }
+  assert.deepEqual(craftWarnings(storySchema.parse(fine)), [], '末世前后的对比是正常写法')
 })

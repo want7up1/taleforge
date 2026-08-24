@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { compileScenario, storySchema, type PluginEntries } from '@taleforge/scenario-compiler'
+import { compileScenario, storySchema, type PluginEntries, type Story } from '@taleforge/scenario-compiler'
 
 const STORY_ID = /^story-[a-z0-9][a-z0-9-]*$/
 
@@ -56,10 +56,72 @@ export interface PublishResult {
   id?: string
   title?: string
   issues?: { path: string; message: string }[]
+  /** 写法体检的提醒（不影响 ok；见 craftWarnings） */
+  warnings?: string[]
   brief: string
 }
 
 const KEEP_VERSIONS = 10
+
+/**
+ * 发布时的写法体检：**不拦截发布**，只把"写了也不会生效"的地方指名报出来。
+ *
+ * 实证依据（desire-era 12 回合逐条核对）：18 条 rules 里，
+ * 「每次性场景结束必须落账」这类**机械条件**执行 5/5 精确，连"进行中不算结束"都分得清；
+ * 「当写到据点内部生活或日常场景时」这类**判断条件** 0/2 全跳过——盘点仓库、检修布防
+ * 两个回合都发生在岛上，GM 判定"这是办正事不算日常"，于是整条不触发。
+ * 两条都在同一份 persona 里全量注入，位置更靠前的那条反而失灵：
+ * **GM 不是没看见，是条件判定失败**。规则数量不是风险，判断余地才是。
+ *
+ * 纯字符串匹配，零 LLM。宁可漏报不误报——误报会让作者学会忽略它。
+ */
+const VAGUE_TRIGGERS = [
+  '适当', '适度', '适时', '恰当', '酌情', '视情况', '看情况',
+  '尽量', '尽可能', '必要时', '需要时', '重要时', '日常时', '有必要时',
+  '氛围到位', '合适的时候', '合适时', '该出现时', '值得时',
+]
+
+/**
+ * 人物设定里的现在时：把后期状态写进初始设定，等于提前剧透 + 时序错位。
+ * 光看时间词会误报——"前顶流偶像，**如今**素面朝天"对比的是末世前后，是正常写法；
+ * "**现在**她是据点防务的头儿"才是问题。所以要求时间词与**归属/职位**词共现。
+ */
+const TENSE_WORDS = ['现在', '如今', '目前']
+const BELONGING_WORDS = [
+  '据点', '岛上', '防务', '掌管', '管着', '负责', '头儿', '首领', '老大',
+  '成员', '家人', '加入', '投靠', '麾下', '手下', '归顺', '效忠',
+]
+
+/** 逐条体检，返回人类可读的提醒行；一切正常返回空数组。 */
+export function craftWarnings(story: Story): string[] {
+  const notes: string[] = []
+  const scan = (text: string, where: string) => {
+    const hit = VAGUE_TRIGGERS.filter(w => text.includes(w))
+    if (hit.length) {
+      notes.push(
+        `${where}：出现「${hit.join('」「')}」——触发条件是性质判断，GM 会判定"这次不算"从而整条跳过。`
+        + '改成一句能查证的事实（位置、次数、状态、阶段），比如"只要人在岛上"而不是"日常场景时"。',
+      )
+    }
+  }
+  story.craft.rules.forEach((r, i) => scan(r, `craft.rules[${i}]`))
+  if (story.craft.reminder) scan(story.craft.reminder, 'craft.reminder')
+  story.acts.forEach((a, i) => {
+    if (a.reminder) scan(a.reminder, `acts[${i}].reminder`)
+  })
+  for (const c of story.cast) {
+    const hit = TENSE_WORDS.filter(w => c.identity.includes(w))
+    const belongs = BELONGING_WORDS.some(w => c.identity.includes(w))
+    if (hit.length && belongs) {
+      notes.push(
+        `cast.${c.id}.identity：出现「${hit.join('」「')}」——人物设定用现在时写后期状态，`
+        + 'GM 从第一幕起就会按终态写他/她（时序错位，还等于提前剧透）。'
+        + '初始设定只写初遇时的样子，归顺、加入、转变之后的身份留给锚点去兑现。',
+      )
+    }
+  }
+  return notes
+}
 
 /** 结构体量指纹：覆盖发布前后对比用，防止模型复述全文时静默丢内容。 */
 function shapeOf(story: unknown): { acts: number; anchors: number; cast: number; resources: number; rules: number; chars: number } {
@@ -163,13 +225,18 @@ export function publishStory(config: Config, storyInput: unknown, opts?: { force
   mkdirSync(dir, { recursive: true })
   writeFileSync(path.join(dir, 'story.json'), JSON.stringify(story, null, 2))
   compileScenario(dir, config.presetsRoot, config.entries)
+  const warnings = craftWarnings(story)
   return {
     ok: true,
     id: story.id,
     title: story.title,
+    ...warnings.length ? { warnings } : {},
     brief: `《${story.title}》已发布并编译（id：${story.id}，${shapeBrief(shapeOf(story))}）。`
       + '告诉玩家：回到剧本库即可看到并开始游戏。后续想改，直接在这里说，改完重新发布即可。'
-      + (previous ? '旧版已自动留档，剧本详情页可回滚。' : ''),
+      + (previous ? '旧版已自动留档，剧本详情页可回滚。' : '')
+      + (warnings.length
+        ? `\n\n写法体检（已发布，不影响开局；但这些地方 GM 大概率不会照做）：\n${warnings.map(w => `- ${w}`).join('\n')}`
+        : ''),
   }
 }
 

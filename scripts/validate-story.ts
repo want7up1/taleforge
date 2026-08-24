@@ -5,6 +5,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { storySchema } from '../packages/scenario-compiler/src/index.ts'
+import { craftWarnings } from '../packages/workshop/src/index.ts'
 
 const target = process.argv[2]
 if (!target) {
@@ -47,4 +48,10 @@ if (s.mechanics) {
 // 品质提示（不算错误）：必需锚点缺完成信号是卡幕/跳幕的头号来源
 if (noSignal.length) {
   console.log(`  ⚠ ${noSignal.length} 个必需锚点没写完成信号（${noSignal.map(a => a.id).join(', ')}）——强烈建议补上`)
+}
+// 写法体检：判断型触发条件 GM 会整条跳过（实证见 packages/workshop craftWarnings）
+const warnings = craftWarnings(s)
+if (warnings.length) {
+  console.log(`\n  写法体检 ${warnings.length} 处（不算错误，但这些地方 GM 大概率不会照做）：`)
+  for (const w of warnings) console.log(`  ⚠ ${w}`)
 }
