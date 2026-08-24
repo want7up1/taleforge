@@ -87,7 +87,7 @@ export const inject = ['tools']
 
 /** 给 GM 的回执：已经落账了，别再手动记一遍，把它写进正文。 */
 function renderUpkeep(entries: UpkeepEntry[]): string {
-  const parts = entries.map(e => `${e.reason}（${e.id} ${e.delta > 0 ? `+${e.delta}` : e.delta}）`)
+  const parts = entries.map(e => `${e.reason}（${e.label ?? e.id} ${e.delta > 0 ? `+${e.delta}` : e.delta}）`)
   return `【本回合已自动结算】${parts.join('；')}。`
     + '这些已经落账，不要再调 adjust_resources 重复记；把它们写进正文，'
     + '让玩家从画面里看见——写那个消耗它的动作，不要逐条报数。'
@@ -128,6 +128,23 @@ export function apply(ctx: Context, config: Config) {
           phase: { type: 'string', required: true },
           actIndex: { type: 'integer', required: true },
           brief: { type: 'string', required: true },
+          // 周期收支：本回合该滚时才出现。schema 是 additionalProperties: false，
+          // 漏声明这两个键会让整个工具输出被拒绝——连 meta 一起丢，投影就再也收不到上报。
+          upkeep: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                label: { type: 'string' },
+                delta: { type: 'integer', required: true },
+                reason: { type: 'string', required: true },
+                activeAbove: { type: 'integer' },
+              },
+            },
+          },
+          upkeepTurn: { type: 'integer' },
         },
       },
       render: (_args, value) => [{

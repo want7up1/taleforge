@@ -92,7 +92,15 @@ export function compileScenario(
         scope: story.id,
         acts: story.acts,
         // 周期收支挂在 report_progress 上结算：它每回合必调，不必为此新增一次工具往返
-        ...story.mechanics?.upkeep ? { upkeep: story.mechanics.upkeep } : {},
+        // 带上 label：回执是给 GM 看的，写 id 它可能照抄进正文，玩家就看见 grain/fuel 了
+        ...story.mechanics?.upkeep
+          ? {
+              upkeep: story.mechanics.upkeep.map(u => ({
+                ...u,
+                label: story.mechanics?.resources?.find(r => r.id === u.id)?.label ?? u.id,
+              })),
+            }
+          : {},
         cast: story.cast.map(c => ({ id: c.id, name: c.name })),
         // 数值条目名录：供场外修订（resource/attribute 目标）的校验、显示与边界联动提醒
         numeric: {

@@ -83,6 +83,8 @@ export type PressureLevel = 'low' | 'rising' | 'high'
 /** 一条周期收支声明：由剧本在 mechanics.upkeep 里给出，代码每个正戏回合自动结算一次。 */
 export interface UpkeepEntry {
   id: string
+  /** 显示名，由编译器从资源定义带过来；回执用它，别让 GM 看见裸 id */
+  label?: string
   delta: number
   reason: string
   /** 只在当前值大于此数时才滚动（"种下之后才生长"） */

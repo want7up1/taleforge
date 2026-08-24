@@ -666,7 +666,7 @@ function registerNumericTool(ctx: Context, opts: {
       const events = exec.agent.session.events
       // 裁决用现行定义：种子 + 场外修订（min/max/maxStep 等边界即时生效）
       const defs = effectiveNumericDefs(opts.defs, collectNumericRevisions(events), opts.reviseTarget)
-      const current = readNumeric(defs, events, opts.pick)
+      const current = readNumeric(defs, events, opts.pick, opts.reviseTarget === 'resource')
       const { applied } = applyChanges(current, defs, args.changes as never)
       return Promise.resolve({ changes: applied })
     },
@@ -703,17 +703,21 @@ interface UpkeepMetaEntry {
  * 全在这里算：这是既有的分工，数值裁决归代码，且只认代码算出来的结果。
  * 与投影约定一致：不该动时返回**同一个引用**，registry 靠 Object.is 判断有没有变化。
  */
+function dueUpkeep(values: ResourceState, event: { type: string; data: unknown }): UpkeepMetaEntry[] {
+  if (event.type !== 'tool/result') return []
+  const meta = (event.data as { meta?: { kind?: string; upkeep?: UpkeepMetaEntry[] } }).meta
+  if (meta?.kind !== 'progress/report' || !meta.upkeep?.length) return []
+  // activeAbove：值没过线就不滚（"种下之后才生长"）
+  return meta.upkeep.filter(e =>
+    e.activeAbove === undefined || (values[e.id]?.value ?? 0) > e.activeAbove)
+}
+
 function applyUpkeepEvent(
   state: NumericProjState,
   event: { type: string; data: unknown },
   resources: ResourceDef[],
 ): NumericProjState {
-  if (event.type !== 'tool/result') return state
-  const meta = (event.data as { meta?: { kind?: string; upkeep?: UpkeepMetaEntry[] } }).meta
-  if (meta?.kind !== 'progress/report' || !meta.upkeep?.length) return state
-  // activeAbove：值没过线就不滚（"种下之后才生长"）
-  const due = meta.upkeep.filter(e =>
-    e.activeAbove === undefined || (state.values[e.id]?.value ?? 0) > e.activeAbove)
+  const due = dueUpkeep(state.values, event)
   if (!due.length) return state
   const defs = effectiveNumericDefs(resources, state.revisions, 'resource')
   const { state: values } = applyChanges(state.values, defs, due)
@@ -762,18 +766,35 @@ function collectNumericRevisions(events: SessionEvents): NumericDefRevision[] {
   return out
 }
 
-/** 从会话事件里读出当前数值状态（工具执行时用，进程内缓存不随 fork 复制）。 */
+/**
+ * 从会话事件里读出当前数值状态（工具执行时用）。
+ *
+ * **必须与投影同源**：周期收支只带声明、由折叠方裁决，如果这里看不见它，
+ * adjust_resources 就会拿一个偏旧的 before 去算 after，而投影又照单全收——
+ * 结果就是"GM 动过的那几条资源，upkeep 被悄悄覆盖掉"（实测 grain 少扣了 8）。
+ * 所以这里按事件顺序折叠，走和投影同一个 dueUpkeep 判定。
+ */
 function readNumeric(
   defs: NumericDef[],
   events: SessionEvents,
   pick: (meta: unknown) => meta is { changes: AppliedChange[] },
+  withUpkeep = false,
 ): ResourceState {
-  const batches: AppliedChange[][] = []
+  let values = initialState(defs)
   for (const event of events) {
     const meta = metaOf(event, pick)
-    if (meta) batches.push(meta.changes)
+    if (meta) {
+      for (const change of meta.changes) {
+        if (!(change.id in values)) continue
+        values = { ...values, [change.id]: { value: change.after, last: { applied: change.applied, reason: change.reason } } }
+      }
+      continue
+    }
+    if (!withUpkeep) continue
+    const due = dueUpkeep(values, event)
+    if (due.length) values = applyChanges(values, defs, due).state
   }
-  return foldApplied(defs, batches)
+  return values
 }
 
 /** 从会话事件里读出经验/等级/点数账（经验 meta + 加点 meta 按序折叠）。 */

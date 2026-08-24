@@ -93,6 +93,8 @@ export const storySchema = z.object({
         reason: z.string().min(1),
         /** 只在当前值大于此数时才滚动；用于"种下之后才生长"这类条件 */
         activeAbove: z.number().int().optional(),
+        /** 显示名（可省，编译时自动从资源定义补上） */
+        label: z.string().optional(),
       })).max(20).optional(),
       resources: z.array(z.object({
         id: z.string().regex(/^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)?$/, '资源 id 为 kebab-case，可带一个冒号命名空间（如 evolution、desire-suwan、affinity:suwan）'),
