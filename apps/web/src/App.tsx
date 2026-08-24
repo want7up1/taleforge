@@ -36,6 +36,9 @@ export function App() {
   /** 详情页唤起的修改对话（按剧本记账，防止串到别的剧本） */
   const [edit, setEdit] = useState<{ scenarioId: string; sessionId: string }>()
   const [error, setError] = useState<string>()
+  /** 服务端换了前端构建：页面开着不动就一直跑旧 JS，得提示玩家刷新 */
+  const [stale, setStale] = useState(false)
+  const baseBuild = useRef<string | undefined>(undefined)
 
   const refresh = useCallback(async () => {
     try {
@@ -55,6 +58,30 @@ export function App() {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // 部署新版后，开着不动的页面仍跑加载时那份 JS。踩过一次：投影 key 改成按剧本分片后，
+  // 旧 bundle 用全等匹配认不出新 key，结算卡片整列显示资源 id，而服务端一切正常，极难排查。
+  // 这里只提示、不自动刷新——正文读到一半被刷掉更糟。
+  useEffect(() => {
+    const check = async () => {
+      if (document.hidden) return
+      try {
+        const { build } = await api.health()
+        if (!build) return
+        if (baseBuild.current === undefined) baseBuild.current = build
+        else if (build !== baseBuild.current) setStale(true)
+      } catch {
+        // 探测失败不打扰玩家：网络断了自有别的提示
+      }
+    }
+    void check()
+    const timer = setInterval(() => void check(), 60_000)
+    document.addEventListener('visibilitychange', check)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', check)
+    }
+  }, [])
 
   // ---- hash 路由：每个界面一条浏览器历史，前进/后退可用 ----
 
@@ -197,6 +224,7 @@ export function App() {
     }
   }
 
+  const renderView = () => {
   if (view === 'play' && active) {
     return (
       <Play
@@ -319,5 +347,18 @@ export function App() {
       onSettings={() => setView('settings')}
       onWorkshop={() => void enterWorkshop()}
     />
+  )
+  }
+
+  return (
+    <>
+      {stale && (
+        <div className="update-bar">
+          平台已更新，当前页面还在用旧版本——刷新后才会用上新功能与修复。
+          <button onClick={() => location.reload()}>立即刷新</button>
+        </div>
+      )}
+      {renderView()}
+    </>
   )
 }

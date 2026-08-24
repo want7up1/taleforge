@@ -22,6 +22,7 @@ import { factsOf, startObserver } from './observer.ts'
 
 const PORT = Number(process.env.PORT ?? 31415)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+const webDistDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web/dist')
 const dshHome = process.env.DSH_HOME ?? path.join(repoRoot, 'runtime/dsh-home')
 
 // 启动时把剧本源编译进 dsh 的 preset 根（幂等；preset 发现无缓存，立即可用）
@@ -238,12 +239,30 @@ app.delete('/app/settings/subscription', asyncRoute(async (_req, res) => {
 
 // ---- 会话管理 ----
 
+/**
+ * 前端构建标识：取 dist/index.html 里引用的 bundle 文件名（Vite 给它带内容 hash）。
+ *
+ * 玩家的页面是 SPA，开着不动就一直跑加载时那份 JS。部署新版之后，界面上的操作
+ * （开新档、切剧本）都不会重新取 JS——实测踩过：投影 key 改成按剧本分片后，
+ * 旧 bundle 仍用全等匹配 `key === 'mechanics'`，一条投影帧都认不出来，结算卡片
+ * 于是整列显示资源 id。服务端一切正常，只有那一个客户端不对，极难排查。
+ * 所以把这个标识挂进 /app/health，前端比对到变化就提示刷新。
+ */
+const buildId = (() => {
+  try {
+    const html = readFileSync(path.join(webDistDir, 'index.html'), 'utf8')
+    return /assets\/([\w.-]+\.js)/.exec(html)?.[1] ?? 'dev'
+  } catch {
+    return 'dev'
+  }
+})()
+
 app.get('/app/health', asyncRoute(async (_req, res) => {
   try {
     await rpc('session.list', {})
-    res.json({ ok: true, dsh: true })
+    res.json({ ok: true, dsh: true, build: buildId })
   } catch {
-    res.json({ ok: true, dsh: false })
+    res.json({ ok: true, dsh: false, build: buildId })
   }
 }))
 
@@ -1114,11 +1133,10 @@ app.get('/app/sessions/:id/events', (req, res) => {
 
 // ---- SPA 静态托管（生产模式；开发时由 Vite dev server 提供） ----
 
-const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web/dist')
-if (existsSync(webDist)) {
-  app.use(express.static(webDist))
+if (existsSync(webDistDir)) {
+  app.use(express.static(webDistDir))
   app.get(/^\/(?!app\/).*/, (_req, res) => {
-    res.sendFile(path.join(webDist, 'index.html'))
+    res.sendFile(path.join(webDistDir, 'index.html'))
   })
 }
 

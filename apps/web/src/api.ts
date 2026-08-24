@@ -20,6 +20,9 @@ async function json<T>(resPromise: Promise<Response>): Promise<T> {
 }
 
 export const api = {
+  /** build 是前端 bundle 的文件名：服务端换版本时它会变，用来提示玩家刷新 */
+  health: () => json<{ ok: boolean; dsh: boolean; build?: string }>(fetch('/app/health')),
+
   credentialStatus: () => json<CredentialStatus>(fetch('/app/settings/credentials')),
 
   saveCredential: (value: string) =>
