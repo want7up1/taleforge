@@ -429,3 +429,14 @@ test('投影 key 按剧本分片：每部剧本的机制与进度都带自己的
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('standard 模块带着"文字代画面"的三条：定镜、连续场景、数值写成动作', () => {
+  const persona = renderPersona(storySchema.parse({ ...story, craft: { modules: ['standard'], rules: [] } }))
+  // 这三条是文字游戏区别于其他游戏的地方——画面得由文字自己承担，删了就退回巡视报告
+  assert.match(persona, /动笔先立定镜/)
+  assert.match(persona, /一个回合是一个连续场景/)
+  assert.match(persona, /数值的变化写成动作/)
+  // 未声明 standard 的剧本不该拿到它们
+  const bare = renderPersona(storySchema.parse({ ...story, craft: { modules: [], rules: [] } }))
+  assert.doesNotMatch(bare, /动笔先立定镜/)
+})
