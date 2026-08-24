@@ -11,7 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 // 副作用导入：把 tools / sessionProjections 挂上 Context
 import '@deepseek-ai/dsh-session-projection'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import {
   applyReport,
@@ -22,7 +22,7 @@ import {
   reduceEvent,
   remainingAnchors,
 } from './progress.ts'
-import type { ActDef, ProgressState, Revision } from './types.ts'
+import type { ActDef, ProgressState, Revision, UpkeepEntry } from './types.ts'
 
 export * from './progress.ts'
 export * from './types.ts'
@@ -64,6 +64,11 @@ export interface Config {
   /** 幕结构种子，由剧本编译器写入 */
   acts: ActDef[]
   /**
+   * 周期收支（剧本 mechanics.upkeep）：每个正戏回合自动结算一次，GM 不必记任何数字。
+   * 挂在 report_progress 上是因为它每回合必调——不必为此新增一次工具往返、增加首字延迟。
+   */
+  upkeep?: UpkeepEntry[]
+  /**
    * 投影 key 的剧本分片（剧本 id）。dsh 的投影 registry 全局按 key 唯一，同 key 的
    * 注册者共享一个 unit——它假定同构，而各剧本的幕结构不同构。详见 packages/mechanics 同名字段。
    */
@@ -80,8 +85,17 @@ export interface Config {
 export const name = 'taleforge-progress'
 export const inject = ['tools']
 
+/** 给 GM 的回执：已经落账了，别再手动记一遍，把它写进正文。 */
+function renderUpkeep(entries: UpkeepEntry[]): string {
+  const parts = entries.map(e => `${e.reason}（${e.id} ${e.delta > 0 ? `+${e.delta}` : e.delta}）`)
+  return `【本回合已自动结算】${parts.join('；')}。`
+    + '这些已经落账，不要再调 adjust_resources 重复记；把它们写进正文，'
+    + '让玩家从画面里看见——写那个消耗它的动作，不要逐条报数。'
+}
+
 export function apply(ctx: Context, config: Config) {
   const seed = config?.acts ?? []
+  const upkeep = config?.upkeep ?? []
   if (seed.length === 0) return
   const cast = config?.cast ?? []
 
@@ -120,22 +134,32 @@ export function apply(ctx: Context, config: Config) {
         type: 'text',
         text: (value as { brief: string }).brief,
       }],
-      presentationMeta: (_args, value) => ({
-        kind: 'progress/report',
-        accepted: (value as { accepted: string[] }).accepted,
-      }),
+      presentationMeta: (_args, value) => {
+        const v = value as { accepted: string[]; upkeep?: UpkeepEntry[]; upkeepTurn?: number }
+        // 只在真的该滚时才写这两个键：工具输出必须是无损 JSON，值为 undefined 的键会被 dsh 整个拒绝
+        const meta: Record<string, unknown> = { kind: 'progress/report', accepted: v.accepted }
+        if (v.upkeep && v.upkeepTurn !== undefined) {
+          meta.upkeep = v.upkeep
+          meta.upkeepTurn = v.upkeepTurn
+        }
+        return meta as JsonValue
+      },
     },
     execute(args, exec) {
       if (!exec.agent) throw new Error('report_progress 需要一个归属会话')
       const state = readState(exec.agent.session.events)
       const acts = effectiveActs(seed, state.revisions)
       const outcome = applyReport(state, acts, (args.achieved as string[]) ?? [])
+      // 周期收支：每个正戏回合滚一次。同回合重复上报（实测存在）不再滚。
+      const due = upkeep.length > 0 && state.turn > (state.lastUpkeepTurn ?? 0)
       const brief = renderBrief(outcome, acts, state.revisions, cast)
+        + (due ? `\n${renderUpkeep(upkeep)}` : '')
       return Promise.resolve({
         accepted: outcome.accepted,
         phase: outcome.state.phase,
         actIndex: outcome.state.actIndex,
         brief,
+        ...due ? { upkeep, upkeepTurn: state.turn } : {},
       })
     },
     presentCall: () => ({ card: 'generic', title: '上报剧情进度', kind: 'other' }),

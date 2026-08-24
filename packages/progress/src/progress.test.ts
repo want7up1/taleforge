@@ -6,6 +6,7 @@ import {
   effectiveActs,
   foldEvents,
   initialProgress,
+  reduceEvent,
   pressureOf,
   remainingAnchors,
   validateRevisions,
@@ -198,4 +199,26 @@ test('边界联动提醒：只改语义不动边界要警告，动了边界或�
     numeric,
   )
   assert.deepEqual(none, [])
+})
+
+test('周期收支每回合只滚一次：同回合重复上报不重复结算', () => {
+  const acts = [{ id: 'a1', title: '一', objective: 'o', anchors: [{ id: 'x', text: 't', required: true }] }]
+  let state = initialProgress()
+  state = reduceEvent(state, { type: 'turn/start', data: {} }, acts)
+  assert.equal(state.turn, 1)
+  assert.equal(state.lastUpkeepTurn ?? 0, 0, '回合开始时还没滚过')
+
+  // 第一次上报：带 upkeepTurn，记下已滚
+  state = reduceEvent(state, {
+    type: 'tool/result',
+    data: { meta: { kind: 'progress/report', accepted: [], upkeepTurn: 1 } },
+  }, acts)
+  assert.equal(state.lastUpkeepTurn, 1)
+
+  // 同回合再上报一次（实测存在）：turn 没涨，工具那侧据此不再产出 upkeep
+  assert.equal(state.turn > (state.lastUpkeepTurn ?? 0), false, '同回合不该再滚')
+
+  // 下一回合开始，又该滚了
+  state = reduceEvent(state, { type: 'turn/start', data: {} }, acts)
+  assert.equal(state.turn > (state.lastUpkeepTurn ?? 0), true)
 })

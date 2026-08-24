@@ -75,6 +75,25 @@ export const storySchema = z.object({
   mechanics: z
     .object({
       /** 资源条：随剧情涨落的数值（好感、体力、物资……） */
+      /**
+       * 周期收支（可选）：每个正戏回合由**代码**自动结算一次，GM 一个数字都不用记。
+       * 每天的口粮消耗、灯油折耗这类纯机械规则本就属于代码权威那一侧——交给 GM 逐条报数，
+       * 既会漏（实测整回合漏调 report_progress 占 6%），又白白挤占它写正文的注意力。
+       *
+       * 作物生长也用它表达，不必另造计时器：把"麦苗"做成一条 0–3 的资源，
+       * 声明 `{ id: 'crop', delta: 1, activeAbove: 0 }`，GM 播种时把它设成 1，
+       * 之后每回合自动 +1，到 3 即可收割——玩家在面板上也直接看得见进度。
+       */
+      upkeep: z.array(z.object({
+        /** 资源 id，必须是本剧本已声明的条目 */
+        id: z.string(),
+        /** 每个正戏回合的变化量（负数为消耗） */
+        delta: z.number().int(),
+        /** 落账理由，也会出现在给 GM 的回执里 */
+        reason: z.string().min(1),
+        /** 只在当前值大于此数时才滚动；用于"种下之后才生长"这类条件 */
+        activeAbove: z.number().int().optional(),
+      })).max(20).optional(),
       resources: z.array(z.object({
         id: z.string().regex(/^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)?$/, '资源 id 为 kebab-case，可带一个冒号命名空间（如 evolution、desire-suwan、affinity:suwan）'),
         label: z.string().min(1),

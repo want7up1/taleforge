@@ -13,7 +13,7 @@ import type {
 import { isReportMeta, isRevisionMeta } from './types.ts'
 
 export function initialProgress(): ProgressState {
-  return { actIndex: 0, achieved: [], turn: 0, lastProgressTurn: 0, phase: 'playing', revisions: [] }
+  return { actIndex: 0, achieved: [], turn: 0, lastProgressTurn: 0, lastUpkeepTurn: 0, phase: 'playing', revisions: [] }
 }
 
 /** 现行有效的幕结构 = 剧本种子 + anchor 类修订按序覆盖。 */
@@ -121,7 +121,9 @@ export function reduceEvent(
     return { ...state, revisions: [...state.revisions, ...meta.revisions] }
   }
   if (isReportMeta(meta)) {
-    return applyReport(state, effectiveActs(seed, state.revisions), meta.accepted).state
+    const next = applyReport(state, effectiveActs(seed, state.revisions), meta.accepted).state
+    // 记下这一回合已经滚过周期收支，同回合再次上报就不再滚
+    return meta.upkeepTurn === undefined ? next : { ...next, lastUpkeepTurn: meta.upkeepTurn }
   }
   return state
 }

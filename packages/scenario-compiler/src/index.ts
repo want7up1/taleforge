@@ -91,6 +91,8 @@ export function compileScenario(
         // 一个 unit（它假定同构），而各剧本的幕结构与数值定义并不同构
         scope: story.id,
         acts: story.acts,
+        // 周期收支挂在 report_progress 上结算：它每回合必调，不必为此新增一次工具往返
+        ...story.mechanics?.upkeep ? { upkeep: story.mechanics.upkeep } : {},
         cast: story.cast.map(c => ({ id: c.id, name: c.name })),
         // 数值条目名录：供场外修订（resource/attribute 目标）的校验、显示与边界联动提醒
         numeric: {

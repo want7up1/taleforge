@@ -520,8 +520,10 @@ export function apply(ctx: Context, config: Config) {
         schema: mechanicsSchema,
         init: (): NumericProjState => ({ values: initialState(resources), revisions: [] }),
         // 不认识的事件必须原样返回同一引用，registry 靠 Object.is 判断有没有变化
-        apply: (state: NumericProjState, event: { type: string; data: unknown }) =>
-          applyNumericEvent(state, event, isMechanicsResult, 'resource'),
+        apply: (state: NumericProjState, event: { type: string; data: unknown }) => {
+          const rolled = applyUpkeepEvent(state, event, resources)
+          return rolled === state ? applyNumericEvent(state, event, isMechanicsResult, 'resource') : rolled
+        },
         view: (state: NumericProjState) => ({
           defs: effectiveNumericDefs(resources, state.revisions, 'resource'),
           state: state.values,
@@ -685,6 +687,37 @@ function metaOf<T>(
 interface NumericProjState {
   values: ResourceState
   revisions: NumericDefRevision[]
+}
+
+/** 周期收支声明的运行时形状（事实来源是 progress 包的 report_progress meta；不跨包引类型）。 */
+interface UpkeepMetaEntry {
+  id: string
+  delta: number
+  reason: string
+  activeAbove?: number
+}
+
+/**
+ * 周期收支的折叠。report_progress 的 meta 只带**声明**——progress 插件不知道资源当前值，
+ * 也不知道现行定义（改过名/改过边界的修订都在这边）。所以 clamp、maxStep 与 activeAbove
+ * 全在这里算：这是既有的分工，数值裁决归代码，且只认代码算出来的结果。
+ * 与投影约定一致：不该动时返回**同一个引用**，registry 靠 Object.is 判断有没有变化。
+ */
+function applyUpkeepEvent(
+  state: NumericProjState,
+  event: { type: string; data: unknown },
+  resources: ResourceDef[],
+): NumericProjState {
+  if (event.type !== 'tool/result') return state
+  const meta = (event.data as { meta?: { kind?: string; upkeep?: UpkeepMetaEntry[] } }).meta
+  if (meta?.kind !== 'progress/report' || !meta.upkeep?.length) return state
+  // activeAbove：值没过线就不滚（"种下之后才生长"）
+  const due = meta.upkeep.filter(e =>
+    e.activeAbove === undefined || (state.values[e.id]?.value ?? 0) > e.activeAbove)
+  if (!due.length) return state
+  const defs = effectiveNumericDefs(resources, state.revisions, 'resource')
+  const { state: values } = applyChanges(state.values, defs, due)
+  return values === state.values ? state : { ...state, values }
 }
 
 function applyNumericEvent(

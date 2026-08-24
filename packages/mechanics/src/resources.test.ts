@@ -64,3 +64,29 @@ test('折叠重放得到同一状态——fork 出的支线靠它重算', () => 
   assert.equal(step2.state['affinity:suwan'].value, 49)
   assert.equal(step2.state['affinity:suwan'].last?.reason, '替她挡下一击')
 })
+
+test('周期收支：report_progress 的 meta 一到，资源自动滚一次，clamp 照常', () => {
+  const defs = [
+    { id: 'grain', label: '口粮', group: 'self' as const, min: 0, max: 100, initial: 20, maxStep: 50, guidance: 'g' },
+    { id: 'crop', label: '麦苗', group: 'self' as const, min: 0, max: 3, initial: 0, maxStep: 5, guidance: 'g' },
+  ]
+  let state = initialState(defs)
+  const upkeep = [
+    { id: 'grain', delta: -10, reason: '日耗' },
+    // activeAbove：没种下（0）就不长
+    { id: 'crop', delta: 1, reason: '抽穗', activeAbove: 0 },
+  ]
+  const due = upkeep.filter(e => e.activeAbove === undefined || (state[e.id]?.value ?? 0) > e.activeAbove)
+  assert.deepEqual(due.map(d => d.id), ['grain'], '麦苗未种下不该滚')
+
+  const r1 = applyChanges(state, defs, due)
+  assert.equal(r1.state.grain.value, 10)
+
+  // 种下之后（值=1）才开始长，且到 max 就停
+  state = { ...r1.state, crop: { value: 3 } }
+  const due2 = upkeep.filter(e => e.activeAbove === undefined || (state[e.id]?.value ?? 0) > e.activeAbove)
+  assert.deepEqual(due2.map(d => d.id).sort(), ['crop', 'grain'])
+  const r2 = applyChanges(state, defs, due2)
+  assert.equal(r2.state.crop.value, 3, '到上限不再增长')
+  assert.equal(r2.state.grain.value, 0, '口粮见底但不为负')
+})

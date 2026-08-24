@@ -69,16 +69,37 @@ export interface ProgressState {
   turn: number
   /** 最近一次主线进展（锚点达成或转幕）发生的回合 */
   lastProgressTurn: number
+  /**
+   * 最近一次周期收支结算的回合。GM 一个回合里调两次 report_progress 是实测存在的，
+   * 靠它保证每回合只滚一次（旧存档没有此字段，按 0 处理）。
+   */
+  lastUpkeepTurn?: number
   phase: 'playing' | 'ended'
   revisions: Revision[]
 }
 
 export type PressureLevel = 'low' | 'rising' | 'high'
 
+/** 一条周期收支声明：由剧本在 mechanics.upkeep 里给出，代码每个正戏回合自动结算一次。 */
+export interface UpkeepEntry {
+  id: string
+  delta: number
+  reason: string
+  /** 只在当前值大于此数时才滚动（"种下之后才生长"） */
+  activeAbove?: number
+}
+
 /** report_progress 的 tool/result.meta 载荷 */
 export interface ReportMeta {
   kind: 'progress/report'
   accepted: string[]
+  /**
+   * 本回合该结算的周期收支。这里只带**声明**：真正的 clamp 与 activeAbove 判定由
+   * mechanics 的投影去做——当前值和现行定义都在它手上，progress 只负责决定"什么时候滚"。
+   */
+  upkeep?: UpkeepEntry[]
+  /** 结算所属回合，投影据此记 lastUpkeepTurn，保证同回合重复上报不会滚两次 */
+  upkeepTurn?: number
 }
 
 /** revise_setting 的 tool/result.meta 载荷 */
