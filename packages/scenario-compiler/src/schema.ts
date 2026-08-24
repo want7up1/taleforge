@@ -183,6 +183,13 @@ export const storySchema = z.object({
      * 上限 600 字——贴身的前提是短。
      */
     reminder: z.string().min(1).max(600).optional(),
+    /**
+     * 强度词表（可选）：剧本自己声明的直白用词。平台只按回合数命中数——连续几回合
+     * 一次都不出现，就把这个事实贴回生成点（长局里正文先例会压过 rating 声明，
+     * 实测 41 回合局全程规避词表，而干净上下文里首回合就照写）。
+     * 平台永不判断内容、永不携带强度：写什么词、写多深，全由剧本定。
+     */
+    intensity_words: z.array(z.string().min(1)).max(60).optional(),
   }),
 })
 

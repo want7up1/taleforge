@@ -8,6 +8,7 @@
  */
 import { appendFileSync } from 'node:fs'
 import path from 'node:path'
+import type { TurnFact } from './drift.ts'
 import { onMuxFrame } from './dsh.ts'
 
 export interface ObservedEvent {
@@ -39,6 +40,29 @@ function textOfBlocks(blocks: unknown): string {
 const isOffstageAsk = (text: string) => text.trimStart().startsWith('【场外】')
 const isOffstageReply = (text: string) => /^\s*[（(]场外[)）]/.test(text)
 
+/** 一个回合里玩家可见的正文：最后一条 assistant/message 的 text 块。 */
+export function visibleTextOf(events: ObservedEvent[]): string {
+  let visible = ''
+  for (const e of events) {
+    if (e.type !== 'assistant/message') continue
+    const t = textOfBlocks((e.data as { message?: { content?: unknown } }).message?.content)
+    if (t) visible = t
+  }
+  return visible
+}
+
+/**
+ * 最近几回合的事实，供回合头注入做漂移回灌（apps/bff drift.ts）。
+ * **只在内存**：正文是剧情内容，日志留痕只记统计数字，不落盘。
+ * 新的在前；只留够判定用的长度，进程重启后从下一回合重新攒。
+ */
+const RECENT_KEEP = 4
+const recentFacts = new Map<string, TurnFact[]>()
+
+export function factsOf(sessionId: string): readonly TurnFact[] {
+  return recentFacts.get(sessionId) ?? []
+}
+
 /** 对一个完整回合（turn/start..turn/end 的事件序列）做结构检查。纯函数，可离线跑历史存档。 */
 export function inspectTurn(sessionId: string, events: ObservedEvent[]): TurnRecord {
   const end = events.find(e => e.type === 'turn/end')
@@ -58,13 +82,11 @@ export function inspectTurn(sessionId: string, events: ObservedEvent[]): TurnRec
     .filter(e => e.type === 'tool/call')
     .map(e => String((e.data as { name?: unknown }).name ?? ''))
 
-  let visible = ''
+  const visible = visibleTextOf(events)
   let reasoningChars = 0
   for (const e of events) {
     if (e.type !== 'assistant/message') continue
     const content = (e.data as { message?: { content?: unknown } }).message?.content
-    const t = textOfBlocks(content)
-    if (t) visible = t
     if (Array.isArray(content)) {
       for (const b of content as { type?: string; text?: string }[]) {
         if (b?.type === 'reasoning' && typeof b.text === 'string') reasoningChars += b.text.length
@@ -150,6 +172,13 @@ export function startObserver(dshHome: string): void {
     if (event.type !== 'turn/end') return
     buffers.delete(sid)
     const record = inspectTurn(sid, buffer)
+    const facts = recentFacts.get(sid) ?? []
+    facts.unshift({
+      kind: record.kind,
+      markers: Number(record.info.markers ?? 0),
+      text: visibleTextOf(buffer),
+    })
+    recentFacts.set(sid, facts.slice(0, RECENT_KEEP))
     try {
       appendFileSync(logPath, `${JSON.stringify(record)}\n`)
       if (record.violations.length) {

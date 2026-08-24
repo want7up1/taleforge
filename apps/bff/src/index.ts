@@ -17,7 +17,8 @@ import { listVersions, publishStory, versionsDirOf } from '@taleforge/workshop'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, channelRpc, onMuxFrame, rpc } from './dsh.ts'
-import { startObserver } from './observer.ts'
+import { driftNotes } from './drift.ts'
+import { factsOf, startObserver } from './observer.ts'
 
 const PORT = Number(process.env.PORT ?? 31415)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -829,12 +830,24 @@ function reminderOf(presetId: string, actIndex: number | undefined): string | un
   try {
     const story = JSON.parse(
       readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8'),
-    ) as { craft?: { reminder?: string }; acts?: { reminder?: string }[] }
+    ) as { craft?: { reminder?: string; intensity_words?: string[] }; acts?: { reminder?: string }[] }
     const staged = actIndex !== undefined ? story.acts?.[actIndex]?.reminder?.trim() : undefined
     const text = staged || story.craft?.reminder?.trim()
     return text || undefined
   } catch {
     return undefined
+  }
+}
+
+/** 剧本声明的强度词表；没声明就返回空数组（平台不自带任何词）。 */
+function intensityWordsOf(presetId: string): string[] {
+  try {
+    const story = JSON.parse(
+      readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8'),
+    ) as { craft?: { intensity_words?: string[] } }
+    return story.craft?.intensity_words ?? []
+  } catch {
+    return []
   }
 }
 
@@ -953,9 +966,13 @@ async function turnHeadBlock(sessionId: string, playerText: string): Promise<{ t
   }
   const reminder = reminderOf(preset, actIndex)
   const quirk = await quirkOf(sessionId)
+  // 漂移回灌排在最后：它是本回合最该被看见的一条，且只在连续不达标时才有内容
+  const drift = driftNotes(factsOf(sessionId), intensityWordsOf(preset))
   return {
     type: 'text',
-    text: `\n\n${quirk}${TURN_FLOW_REMINDER}${alloc}${panel}${reminder ? `\n【剧本提醒】${reminder}` : ''}`,
+    text: `\n\n${quirk}${TURN_FLOW_REMINDER}${alloc}${panel}`
+      + `${reminder ? `\n【剧本提醒】${reminder}` : ''}`
+      + (drift.length ? `\n${drift.join('\n')}` : ''),
   }
 }
 
