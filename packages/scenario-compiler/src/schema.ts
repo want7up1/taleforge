@@ -194,6 +194,20 @@ export const storySchema = z.object({
     })
     .refine(m => m.resources || m.attributes || m.checks || m.inventory, '声明了 mechanics 就至少要启用一个模块')
     .refine(m => !m.progression || m.attributes, '经验等级需要同时声明 attributes——属性点要加在属性上')
+    // upkeep 的 id 写错不会报错，只会永远不结算：裁决时查不到定义就跳过那一笔，
+    // 面板上只是"这个数字一直不动"，作者很难联想到是 id 打错了。发布时就拦下来。
+    .superRefine((m, ctx) => {
+      const ids = new Set((m.resources ?? []).map(r => r.id))
+      m.upkeep?.forEach((u, i) => {
+        if (!ids.has(u.id)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['upkeep', i, 'id'],
+            message: `周期收支引用了未声明的资源「${u.id}」——写错的 id 不会报错，只会静默不结算`,
+          })
+        }
+      })
+    })
     .optional(),
   /**
    * 工艺声明——显式、无隐藏默认。modules 必填（可为空数组 = 只要底座结构保证）；

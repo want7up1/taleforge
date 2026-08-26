@@ -570,3 +570,19 @@ test('正文里出不出现机制数字由剧本定：系统流剧本能把限�
   assert.match(shown, /可以直接报出点数与难度/)
   assert.doesNotMatch(shown, /不出现任何数字和机制词/)
 })
+
+test('周期收支的 id 必须是已声明的资源：写错不该静默不结算', () => {
+  const withUpkeep = (id: string) => ({
+    ...story,
+    mechanics: {
+      resources: [{ id: 'grain', label: '口粮', group: 'self', min: 0, max: 100, initial: 50, maxStep: 25, guidance: '日耗' }],
+      upkeep: [{ id, delta: -8, reason: '日耗' }],
+    },
+  })
+  assert.equal(storySchema.safeParse(withUpkeep('grain')).success, true)
+
+  const typo = storySchema.safeParse(withUpkeep('grian'))
+  assert.equal(typo.success, false)
+  assert.match(typo.error!.issues[0].message, /grian/, '要指名是哪个 id 写错了')
+  assert.deepEqual(typo.error!.issues[0].path, ['mechanics', 'upkeep', 0, 'id'])
+})
