@@ -7,15 +7,15 @@ const play = (markers: number, text = '正文'): TurnFact => ({ kind: 'play', ma
 const off = (): TurnFact => ({ kind: 'offstage', markers: 0, text: '（场外）答疑' })
 
 test('达标就不注入——闭环不是第八条常驻提醒', () => {
-  assert.deepEqual(driftNotes([play(3), play(2), play(4)]), [])
+  assert.deepEqual(driftNotes([play(3), play(2), play(4)], [], true), [])
 })
 
 test('单回合掉到 0 不提醒：那是正常波动，过度反应会逼出反弹', () => {
-  assert.deepEqual(driftNotes([play(0), play(3)]), [])
+  assert.deepEqual(driftNotes([play(0), play(3)], [], true), [])
 })
 
 test('连续两回合低于下限才提醒，且把两回合的实际处数按时间顺序报出来', () => {
-  const notes = driftNotes([play(0), play(1)])
+  const notes = driftNotes([play(0), play(1)], [], true)
   assert.equal(notes.length, 1)
   assert.match(notes[0], /^【笔触】/)
   assert.match(notes[0], /1 处、0 处/, '应按时间顺序念：先上上回合再上回合')
@@ -23,13 +23,13 @@ test('连续两回合低于下限才提醒，且把两回合的实际处数按�
 
 test('场外回合不算进连续段——它本来就不写正文', () => {
   // 夹着场外：真正的正戏是 0 和 1，仍应触发
-  assert.equal(driftNotes([play(0), off(), play(1)]).length, 1)
+  assert.equal(driftNotes([play(0), off(), play(1)], [], true).length, 1)
   // 正戏只有一个，另一个是场外，样本不足不提醒
-  assert.deepEqual(driftNotes([play(0), off()]), [])
+  assert.deepEqual(driftNotes([play(0), off()], [], true), [])
 })
 
 test('恢复达标后立刻撤销提醒', () => {
-  assert.deepEqual(driftNotes([play(2), play(0), play(0)]), [])
+  assert.deepEqual(driftNotes([play(2), play(0), play(0)], [], true), [])
 })
 
 test('intensityHits 数的是命中次数，同一个词出现多次都算', () => {
@@ -55,8 +55,15 @@ test('连续三个正戏回合零命中才提醒强度', () => {
 
 test('两项可以同时触发，各占一行', () => {
   const bland = play(0, '含蓄')
-  const notes = driftNotes([bland, bland, bland], ['肉棒'])
+  const notes = driftNotes([bland, bland, bland], ['肉棒'], true)
   assert.equal(notes.length, 2)
   assert.match(notes[0], /【笔触】/)
   assert.match(notes[1], /【强度】/)
+})
+
+test('没选用 standard 模块的剧本：平台不催强调标记', () => {
+  const bare = [play(0), play(0), play(0)]
+  assert.deepEqual(driftNotes(bare), [], '"每回合 2–4 处"是 standard 模块的要求，剧本没选就不该被催')
+  // 同一份事实，剧本选了 standard 就照常回灌
+  assert.equal(driftNotes(bare, [], true).length, 1)
 })

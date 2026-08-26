@@ -197,6 +197,56 @@ export interface NumericDefRevision {
   floor?: number
 }
 
+/** 从一个会话事件里取出符合类型守卫的工具 meta；不是 tool/result 或形状不符时 undefined。 */
+export function metaOf<T>(
+  event: { type: string; data: unknown },
+  pick: (meta: unknown) => meta is T,
+): T | undefined {
+  if (event.type !== 'tool/result') return undefined
+  const meta = (event.data as { meta?: unknown }).meta
+  return pick(meta) ? meta : undefined
+}
+
+/**
+ * 从事件里取数值定义修订。meta kind `progress/revision` 的事实来源在 progress 包的
+ * revise_setting——只认 resource/attribute 两类条目，其余忽略。
+ *
+ * 这里刻意不建跨包依赖（形状以彼处为准），代价是改字段名不会有编译错误；
+ * 兜底靠 contract.test.ts：那份测试真的调 progress 的工具拿 meta 再喂给这边的折叠。
+ */
+export function revisionsInEvent(event: { type: string; data: unknown }): NumericDefRevision[] | undefined {
+  if (event.type !== 'tool/result') return undefined
+  const meta = (event.data as { meta?: { kind?: string; revisions?: unknown[] } }).meta
+  if (meta?.kind !== 'progress/revision' || !Array.isArray(meta.revisions)) return undefined
+  const hits = (meta.revisions as NumericDefRevision[]).filter(
+    r => r && (r.target === 'resource' || r.target === 'attribute') && typeof r.id === 'string',
+  )
+  return hits.length ? hits : undefined
+}
+
+/**
+ * 周期收支声明在事件里的形状：progress 包的 report_progress 只带**声明**
+ * （它不知道资源当前值，也不知道被修订改过的现行定义），实际增减由这边裁决。
+ */
+export interface UpkeepMetaEntry {
+  id: string
+  delta: number
+  reason: string
+  activeAbove?: number
+}
+
+/** 本事件带来的周期收支声明，已按 activeAbove 过滤（"种下之后才生长"）。 */
+export function dueUpkeep(
+  values: ResourceState,
+  event: { type: string; data: unknown },
+): UpkeepMetaEntry[] {
+  if (event.type !== 'tool/result') return []
+  const meta = (event.data as { meta?: { kind?: string; upkeep?: UpkeepMetaEntry[] } }).meta
+  if (meta?.kind !== 'progress/report' || !meta.upkeep?.length) return []
+  return meta.upkeep.filter(e =>
+    e.activeAbove === undefined || (values[e.id]?.value ?? 0) > e.activeAbove)
+}
+
 // ---- 经验与等级：GM 报经验，代码按阈值算等级与发点，玩家自己加点 ----
 
 export interface ProgressionConfig {

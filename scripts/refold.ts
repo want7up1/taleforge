@@ -8,20 +8,14 @@
  */
 import { readFileSync } from 'node:fs'
 import {
-  effectiveNumericDefs,
-  foldApplied,
   foldInventory,
+  foldNumericEvents,
   foldProgression,
-  initialInventory,
-  isAttributesResult,
   isInventoryResult,
-  isMechanicsResult,
   isPointsResult,
   isXpResult,
   progressionView,
-  type AppliedChange,
   type AppliedInventoryChange,
-  type NumericDefRevision,
 } from '../packages/mechanics/src/index.ts'
 import { foldEvents, pressureOf } from '../packages/progress/src/index.ts'
 import { storySchema } from '../packages/scenario-compiler/src/index.ts'
@@ -45,6 +39,22 @@ const events = history.events.map(e => e.event)
 const story = storySchema.parse(JSON.parse(readFileSync(storyPath, 'utf8')))
 const served = history.projections?.values ?? {}
 
+/**
+ * 取一个投影值。投影 key 按剧本分片成 `base:剧本id`（否则多剧本并存时先 mount 的会顶掉后来者），
+ * 所以认前缀不认全等；裸 key 仍接受，兼容单剧本部署与旧存档。
+ *
+ * 与 apps/bff/src/index.ts 的同名函数同一套规则——分片规则要改就两处一起改。
+ * 刻意不共享：把它抽进 packages/mechanics 会让 BFF 为一个纯函数加载整个 dsh 插件包。
+ */
+function projectionOf<T>(base: string): T | undefined {
+  const direct = served[base]
+  if (direct) return direct as T
+  for (const [k, v] of Object.entries(served)) {
+    if (v && k.startsWith(`${base}:`)) return v as T
+  }
+  return undefined
+}
+
 let failures = 0
 function check(name: string, mine: unknown, theirs: unknown): void {
   const a = JSON.stringify(mine)
@@ -67,47 +77,34 @@ function metaBatches<T>(pick: (m: unknown) => m is { changes: T[] }): T[][] {
   return out
 }
 
-function numericRevisions(): NumericDefRevision[] {
-  const out: NumericDefRevision[] = []
-  for (const e of events) {
-    if (e.type !== 'tool/result') continue
-    const meta = (e.data as { meta?: { kind?: string; revisions?: unknown[] } }).meta
-    if (meta?.kind !== 'progress/revision' || !Array.isArray(meta.revisions)) continue
-    for (const r of meta.revisions as NumericDefRevision[]) {
-      if (r && (r.target === 'resource' || r.target === 'attribute')) out.push(r)
-    }
-  }
-  return out
-}
-
 // ---- progress ----
 console.log('progress:')
 const prog = foldEvents(story.acts, events)
-const servedProg = served.progress as {
+const servedProg = projectionOf<{
   actIndex: number; achieved: string[]; phase: string; turn: number
   pressure: { level: string; stalledTurns: number }
-} | undefined
+}>('progress')
 if (servedProg) {
   check('actIndex', prog.actIndex, servedProg.actIndex)
   check('achieved', prog.achieved, servedProg.achieved)
   check('phase', prog.phase, servedProg.phase)
   check('turn', prog.turn, servedProg.turn)
-  check('pressure', pressureOf(prog), servedProg.pressure)
+  check('pressure', pressureOf(prog, story.acts[prog.actIndex]?.pace), servedProg.pressure)
 } else {
   console.log('  （服务端无 progress 投影）')
 }
 
 // ---- mechanics（资源） ----
 console.log('mechanics:')
-const servedMech = served.mechanics as {
+const servedMech = projectionOf<{
+  defs: { id: string }[]
   state: Record<string, { value: number }>
-} | undefined
+}>('mechanics')
 if (story.mechanics?.resources && servedMech) {
-  const revs = numericRevisions()
-  const defs = effectiveNumericDefs(story.mechanics.resources, revs, 'resource')
-  const state = foldApplied(defs, metaBatches<AppliedChange>(isMechanicsResult))
-  for (const def of defs) {
-    check(def.id, state[def.id]?.value, servedMech.state[def.id]?.value)
+  // 与投影同一个 reducer：周期收支与定义修订都在里面按事件顺序算
+  const { values } = foldNumericEvents(story.mechanics.resources, events, 'resource')
+  for (const def of story.mechanics.resources) {
+    check(def.id, values[def.id]?.value, servedMech.state[def.id]?.value)
   }
 } else {
   console.log('  （无资源声明或服务端无投影）')
@@ -116,14 +113,15 @@ if (story.mechanics?.resources && servedMech) {
 // ---- attributes / inventory（声明了才比） ----
 if (story.mechanics?.attributes) {
   console.log('attributes:')
-  const servedAttr = served.attributes as { state: Record<string, { value: number }> } | undefined
-  const defs = effectiveNumericDefs(story.mechanics.attributes, numericRevisions(), 'attribute')
-  const state = foldApplied(defs, metaBatches<AppliedChange>(isAttributesResult))
-  for (const def of defs) check(def.id, state[def.id]?.value, servedAttr?.state[def.id]?.value)
+  const servedAttr = projectionOf<{ state: Record<string, { value: number }> }>('attributes')
+  const { values } = foldNumericEvents(story.mechanics.attributes, events, 'attribute')
+  for (const def of story.mechanics.attributes) {
+    check(def.id, values[def.id]?.value, servedAttr?.state[def.id]?.value)
+  }
 }
 if (story.mechanics?.inventory) {
   console.log('inventory:')
-  const servedInv = served.inventory as { items: { id: string; qty: number }[] } | undefined
+  const servedInv = projectionOf<{ items: { id: string; qty: number }[] }>('inventory')
   const state = foldInventory(
     story.mechanics.inventory.initial,
     metaBatches<AppliedInventoryChange>(isInventoryResult),
@@ -133,7 +131,7 @@ if (story.mechanics?.inventory) {
 }
 if (story.mechanics?.progression) {
   console.log('progression:')
-  const servedProg = served.progression as { xp: number; level: number; unspent: number } | undefined
+  const servedProg = projectionOf<{ xp: number; level: number; unspent: number }>('progression')
   const metas: unknown[] = []
   for (const e of events) {
     if (e.type !== 'tool/result') continue

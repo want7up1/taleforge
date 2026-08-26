@@ -17,8 +17,8 @@ import { listVersions, publishStory, versionsDirOf } from '@taleforge/workshop'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { DshRpcError, channelRpc, onMuxFrame, rpc } from './dsh.ts'
-import { driftNotes } from './drift.ts'
 import { factsOf, startObserver } from './observer.ts'
+import { PROVIDER_QUIRKS, renderTurnHead, type ProjectionValues, type StoryHead } from './turn-head.ts'
 
 const PORT = Number(process.env.PORT ?? 31415)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -42,13 +42,17 @@ compileWorkshopPreset(presetsRoot, {
   scenariosRoot,
   entries,
 })
-const live = compiled.filter(c => !c.removed)
+const live = compiled.filter(c => !c.removed && !c.failed)
 const removed = compiled.filter(c => c.removed)
+const broken = compiled.filter(c => c.failed)
 console.log(`[bff] 已编译剧本 ${live.length} 个：${live.map(c => c.id).join(', ') || '（无）'}`)
 if (removed.length) console.log(`[bff] 已回收源已删除的剧本：${removed.map(c => c.id).join(', ')}`)
+// 坏源不阻塞启动（否则容器无限重启，连修它的 WebUI 都打不开），但必须吵到能被看见
+for (const c of broken) console.error(`[bff] 剧本源损坏，已跳过（旧产出保留，可在剧本页回滚或删除）：${c.id}\n${c.failed}`)
 
 // 被动结构观测：逐回合纯函数检查，只写 observer.jsonl，不干预（护栏 4/6）
-startObserver(dshHome)
+// 行动选项数由剧本声明，观测按各剧本自己的标准记——平台不再假定一定是 4
+startObserver(dshHome, sessionId => actionOptionsOf(sessionId))
 const app = express()
 app.use(express.json({ limit: '1mb' }))
 
@@ -796,26 +800,10 @@ app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
  * 提醒通道整个断流（实测 37 回合里 6 个强场面回合完全跳过固定流程）。把固定流程
  * 追加为玩家消息的第二个文本块，回合开头就贴在生成点旁，不再依赖工具被调用。
  * 前端按【回合流程】前缀隐藏此块；场外消息与工坊会话不注入。
- */
-const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress——每一回合都要调，只报往回合正文里已经达成的锚点（本回合才打算写的不算，下回合再报），无进展传空数组；有机制面板则接着用相应工具把本回合的全部变化结清；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
-
-/**
- * 模型适配层：同一套 persona 在不同模型上的实测差异，按当前会话的 provider 现挑现注。
- * 放在【回合流程】之前（与实测时的相对位置一致），不进 persona——preset 在会话创建时
- * 锁定，而模型可以中途切换，写进 persona 会让两者对不上；放这里还能免掉 DeepSeek 的
- * 无谓约束（护栏 2：硬性禁令保持个位数）。不同模型本来就不共享 prefix cache，按模型
- * 分叉在这一层是免费的。
  *
- * grok：实测 grok-4.5 有六成概率把工具调用当正文写出来——```html 包着的函数调用文本，
- * 参数全对却不发 tool_call，于是整回合既没有正文也没有行动块，玩家只能打"继续"。
- * 用真实 persona 与工具定义直连重放：不加约束 5 次里 3 次翻车（与流式无关，是随机的），
- * 加上这段后连测 5/5 正常。新模型上架时照此流程实测，别照抄别的模型的病历。
+ * 组装本身是纯函数（turn-head.ts，有测试）；这里只负责取三样 IO：面板快照、
+ * 当前 provider 的适配段、剧本 story.json。
  */
-const PROVIDER_QUIRKS: Record<string, string> = {
-  grok: '【调用方式】report_progress、grant_xp、adjust_resources 等是真正的函数工具，'
-    + '必须用工具调用功能发出。绝不把调用写成正文里的文字或代码块——'
-    + '正文里出现函数名、花括号参数或代码围栏，这一回合就是废的。\n',
-}
 
 /** 当前会话实际在跑的 provider 对应的适配段；模型可中途切换，所以每回合现取不缓存。 */
 async function quirkOf(sessionId: string): Promise<string> {
@@ -838,179 +826,59 @@ async function presetOf(sessionId: string): Promise<string | undefined> {
 }
 
 /**
- * 剧本贴身提醒（craft.reminder / acts[].reminder）：长局里正文先例的权重会压过
- * persona 深处的声明（实测 30+ 回合后 rating 直接失效——推理里复述得出来，落笔
- * 跟着旧文风走），把剧本自己声明的短提醒拼进回合头注入块，贴住生成点。
- * 分幕提醒按会话当前幕现挑现注：只注当前幕那段，未到的幕天然防剧透；没写的幕
- * 回落到 craft.reminder。每回合现读现取：修改剧本重新发布后，进行中的局下一
- * 回合就吃到新文本，不受会话锁定影响。
+ * 剧本里与回合头注入有关的那几段。每回合现读现取：修改剧本重新发布后，进行中的局
+ * 下一回合就吃到新的提醒与词表，不受会话锁定影响。读坏了就当没有——注入不能挡住回合。
  */
-function reminderOf(presetId: string, actIndex: number | undefined): string | undefined {
+function storyHeadOf(presetId: string): StoryHead | undefined {
   try {
-    const story = JSON.parse(
-      readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8'),
-    ) as { craft?: { reminder?: string; intensity_words?: string[] }; acts?: { reminder?: string }[] }
-    const staged = actIndex !== undefined ? story.acts?.[actIndex]?.reminder?.trim() : undefined
-    const text = staged || story.craft?.reminder?.trim()
-    return text || undefined
+    return JSON.parse(readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8')) as StoryHead
   } catch {
     return undefined
   }
 }
 
-/** 剧本声明的强度词表；没声明就返回空数组（平台不自带任何词）。 */
-function intensityWordsOf(presetId: string): string[] {
+/**
+ * 该会话所属剧本声明的行动选项数。同步查（观测回调在 mux 帧里跑）：preset 走已有缓存，
+ * 玩家回合必然先经过 prompt 路由把缓存填好；查不到就让调用方按缺省算。
+ */
+function actionOptionsOf(sessionId: string): number | undefined {
+  const preset = presetCache.get(sessionId)
+  if (!preset?.startsWith('story-')) return undefined
   try {
     const story = JSON.parse(
-      readFileSync(path.join(presetsRoot, presetId, 'story.json'), 'utf8'),
-    ) as { craft?: { intensity_words?: string[] } }
-    return story.craft?.intensity_words ?? []
+      readFileSync(path.join(presetsRoot, preset, 'story.json'), 'utf8'),
+    ) as { craft?: { action_options?: number } }
+    return story.craft?.action_options
   } catch {
-    return []
+    return undefined
   }
 }
 
-interface NumericSnapshot {
-  defs: { id: string; label: string; group?: 'affinity' | 'self' | 'world' }[]
-  state: Record<string, { value: number }>
-  groups?: { self?: string; affinity?: string; world?: string }
-}
-interface ProjectionValues {
-  mechanics?: NumericSnapshot | null
-  attributes?: NumericSnapshot | null
-  inventory?: { items: { name: string; qty: number }[] } | null
-  progress?: { actIndex: number } | null
-  progression?: { label: string; xp: number; level: number; next: number | null; unspent: number; levelNames?: string[] } | null
-  [key: string]: unknown
-}
-
-/**
- * 取一个投影值：投影 key 按剧本分片成 `base:剧本id`（否则 dsh 全局唯一的 key 会让
- * 先 mount 的剧本顶掉后来者的 defs——实测荻湾庄的会话拿到过澜心岛的面板）。
- * 认前缀不认全等，裸 key 仍然接受，兼容单剧本部署与旧存档。
- */
-function projectionOf<T>(values: ProjectionValues, base: string): T | undefined {
-  const direct = values[base]
-  if (direct) return direct as T
-  for (const [k, v] of Object.entries(values)) {
-    if (v && k.startsWith(`${base}:`)) return v as T
-  }
-  return undefined
-}
-
-/**
- * 玩家加点行 → spend_points 参数。前端用属性显示名写【加点】行（玩家看得懂），这里按
- * 投影里的现行属性名录（与界面同源，含改名修订）换算成 id，作为机械指令贴进回合头。
- */
-function allocationHint(playerText: string, attributes: NumericSnapshot | null | undefined): string | undefined {
-  const line = playerText.split('\n').map(l => l.trim()).find(l => l.startsWith('【加点】'))
-  if (!line) return undefined
-  const defs = attributes?.defs ?? []
-  const allocations: { id: string; points: number }[] = []
-  const unknown: string[] = []
-  // 条目以顿号/逗号分隔，每条"显示名 +N"（显示名可含空格）；同一属性写多次合并
-  for (const part of line.slice('【加点】'.length).split(/[、,，;；]/)) {
-    const m = /^(.+?)\s*\+\s*(\d+)\s*$/.exec(part.trim())
-    if (!m) continue
-    const def = defs.find(d => d.label === m[1] || d.id === m[1])
-    if (!def) {
-      unknown.push(m[1])
-      continue
-    }
-    const points = Number(m[2])
-    const hit = allocations.find(a => a.id === def.id)
-    if (hit) hit.points += points
-    else allocations.push({ id: def.id, points })
-  }
-  return `【加点】玩家本回合分配属性点——固定流程第 2 步第一件事调 spend_points 原样落账：allocations=${JSON.stringify(allocations)}`
-    + (unknown.length ? `（无法对应属性：${unknown.join('、')}，忽略）` : '')
-}
-
-/**
- * 面板即时快照，随回合头注入（治"GM 忘了物品栏里有什么"与延迟结算）：
- * 机制状态折叠在会话事件里，长局中初始清单早被上下文稀释——GM 会在正文里
- * 发明装备（实测：物品栏躺着钢管，正文抡了五回合不存在的折叠椅）。每回合把
- * 全量数值与物品清单贴到生成点旁，账实相符就有了对照物。hidden 资源一并给
- * GM（本块玩家侧被前端隐藏，与 hidden 的界面约定一致）。
- */
-function panelLines(values: ProjectionValues): string[] {
-  const lines: string[] = []
-  const numeric = (snap: NumericSnapshot | null | undefined): Map<string, string[]> => {
-    const byGroup = new Map<string, string[]>()
-    for (const def of snap?.defs ?? []) {
-      const value = snap?.state[def.id]?.value
-      if (value === undefined) continue
-      const group = def.group ?? ''
-      if (!byGroup.has(group)) byGroup.set(group, [])
-      byGroup.get(group)!.push(`${def.label}${value}`)
-    }
-    return byGroup
-  }
-  const prog = projectionOf<ProjectionValues['progression']>(values, 'progression')
-  if (prog) {
-    const name = prog.levelNames?.[prog.level - 1]
-    lines.push(`等级：${name ? `${name}（Lv.${prog.level}）` : `Lv.${prog.level}`}（${prog.label} ${prog.xp}${prog.next !== null && prog.next !== undefined ? `/${prog.next}` : '，满级'}）`
-      + (prog.unspent > 0 ? `，未分配属性点 ${prog.unspent}` : ''))
-  }
-  const attrs = [...numeric(projectionOf<NumericSnapshot>(values, 'attributes')).values()].flat()
-  if (attrs.length) lines.push(`属性：${attrs.join(' ')}`)
-  const groupTitle = { self: '自身', affinity: '好感', world: '队伍' } as const
-  const mech = projectionOf<NumericSnapshot>(values, 'mechanics')
-  for (const [group, parts] of numeric(mech)) {
-    const title = mech?.groups?.[group as keyof typeof groupTitle]
-      ?? groupTitle[group as keyof typeof groupTitle] ?? group
-    lines.push(`${title}：${parts.join(' ')}`)
-  }
-  const items = projectionOf<{ items: { name: string; qty: number }[] }>(values, 'inventory')?.items ?? []
-  if (items.length) {
-    lines.push(`物品栏：${items.map(i => (i.qty > 1 ? `${i.name}×${i.qty}` : i.name)).join('、')}`)
-  }
-  return lines
-}
-
-/** 正戏回合头注入块：平台固定流程 + 面板快照 + 加点指令 + 剧本贴身提醒。非剧本会话返回 undefined。 */
+/** 正戏回合头注入块。非剧本会话返回 undefined。 */
 async function turnHeadBlock(sessionId: string, playerText: string): Promise<{ type: string; text: string } | undefined> {
   const preset = await presetOf(sessionId).catch(() => undefined)
   if (!preset?.startsWith('story-')) return undefined
-  let panel = ''
-  let alloc = ''
-  let actIndex: number | undefined
+  let values: ProjectionValues = {}
   try {
+    // 这条 RPC 直接返回 projections.values，一次拿全 mechanics/attributes/inventory/progress
     const history = await rpc<{ projections?: { values: ProjectionValues } }>(
       'session.history',
       { sessionId, maxMessages: 1 },
     )
-    const values = history.projections?.values ?? {}
-    actIndex = projectionOf<{ actIndex: number }>(values, 'progress')?.actIndex
-    // 只有开了经验等级的剧本才有 spend_points；没开的剧本即便玩家手打【加点】也不注入
-    const hint = projectionOf(values, 'progression')
-      ? allocationHint(playerText, projectionOf<NumericSnapshot>(values, 'attributes'))
-      : undefined
-    if (hint) alloc = `\n${hint}`
-    // grant_xp 的"每回合必调"也要贴在生成点旁——只写在 persona 里的机械规则，低事件回合会被跳过
-    const progression = projectionOf<ProjectionValues['progression']>(values, 'progression')
-    if (progression) {
-      alloc += `\n【经验】grant_xp 每个正戏回合都要调（只报往回合已定稿正文换来的${progression.label}，没有传 0）。`
-    }
-    const lines = panelLines(values)
-    if (lines.length) {
-      panel = `\n【当前面板】${lines.join('；')}。`
-        + '面板是即时真值：正文中的装备物品必须与物品栏一致（新到手先入账再用）；'
-        + '本回合的一切增减当回合结算，含每回合底噪，不许延后补账。'
-    }
+    values = history.projections?.values ?? {}
   } catch (err) {
-    // 快照拿不到就只注流程与提醒——注入永远不能挡住回合本身；但要留痕，否则加点指令静默丢失没人知道
+    // 快照拿不到就只注流程与提醒；但要留痕，否则加点指令静默丢失没人知道
     console.warn(`[bff] 回合头快照拉取失败（${sessionId}）：${String(err)}`)
   }
-  const reminder = reminderOf(preset, actIndex)
-  const quirk = await quirkOf(sessionId)
-  // 漂移回灌排在最后：它是本回合最该被看见的一条，且只在连续不达标时才有内容
-  const drift = driftNotes(factsOf(sessionId), intensityWordsOf(preset))
   return {
     type: 'text',
-    text: `\n\n${quirk}${TURN_FLOW_REMINDER}${alloc}${panel}`
-      + `${reminder ? `\n【剧本提醒】${reminder}` : ''}`
-      + (drift.length ? `\n${drift.join('\n')}` : ''),
+    text: renderTurnHead({
+      values,
+      playerText,
+      story: storyHeadOf(preset),
+      quirk: await quirkOf(sessionId),
+      recent: factsOf(sessionId),
+    }),
   }
 }
 

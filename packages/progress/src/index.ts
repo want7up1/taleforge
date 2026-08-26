@@ -85,12 +85,17 @@ export interface Config {
 export const name = 'taleforge-progress'
 export const inject = ['tools']
 
-/** 给 GM 的回执：已经落账了，别再手动记一遍，把它写进正文。 */
+/**
+ * 给 GM 的回执：已经落账了，别再手动记一遍。
+ *
+ * 只陈述"账已经记了"这个事实，不规定正文该怎么写它——那是工艺，归剧本与它选用的
+ * 工艺模块管（standard 的"数值的变化写成动作"就是其中一条）。底座往这里塞写法要求，
+ * 等于把某个模块的审美强加给所有剧本。
+ */
 function renderUpkeep(entries: UpkeepEntry[]): string {
   const parts = entries.map(e => `${e.reason}（${e.label ?? e.id} ${e.delta > 0 ? `+${e.delta}` : e.delta}）`)
   return `【本回合已自动结算】${parts.join('；')}。`
-    + '这些已经落账，不要再调 adjust_resources 重复记；把它们写进正文，'
-    + '让玩家从画面里看见——写那个消耗它的动作，不要逐条报数。'
+    + '这些已经落账，不要再调 adjust_resources 重复记；本回合的正文按剧本的工艺要求处理它们。'
 }
 
 export function apply(ctx: Context, config: Config) {
@@ -110,7 +115,8 @@ export function apply(ctx: Context, config: Config) {
       + '本回合才打算写的不报，写完了等下回合再报。一个都没有就传空数组。'
       + '返回当前幕、未完成锚点与节奏指示——以返回内容为准推进剧情。'
       + '只认当前幕的锚点；达成标准是完成信号已经落在纸面上，'
-      + '不是"接近了"，也不是"这回合会写到"——预报锚点等于把剧情赶进度，节奏是要慢慢演的。',
+      + '不是"接近了"，也不是"这回合会写到"——锚点打勾不可逆、误报无法回滚，'
+      + '而剧情推进多快由剧本自己的节奏决定，不由上报快慢决定。',
     parameters: {
       achieved: {
         type: 'array',
@@ -293,7 +299,7 @@ export function apply(ctx: Context, config: Config) {
         achieved: state.achieved,
         turn: state.turn,
         phase: state.phase,
-        pressure: pressureOf(state),
+        pressure: pressureOf(state, effectiveActs(seed, state.revisions)[state.actIndex]?.pace),
         revisions: state.revisions as unknown as Record<string, unknown>[],
       }),
       stateVersion: 1,
@@ -436,7 +442,7 @@ export function renderBrief(
         lines.push(`- [${a.id}] ${a.text}${a.required ? '（必需）' : '（可选）'}${a.signal ? `｜完成信号：${a.signal}` : ''}`)
       }
     }
-    const pressure = pressureOf(state)
+    const pressure = pressureOf(state, act?.pace)
     if (pressure.level === 'rising') {
       lines.push(`节奏：已 ${pressure.stalledTurns} 回合无主线进展——本回合至少一个行动选项直指某个未完成锚点。`)
     } else if (pressure.level === 'high') {

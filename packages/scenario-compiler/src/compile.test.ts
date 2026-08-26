@@ -3,7 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { MASKED_GLOBAL_TOOLS, applyRevisionsToStory, compileAll, compileScenario, compileWorkshopPreset, renderPersona, storySchema } from './index.ts'
+import { WORKSHOP_PERSONA } from './workshop.ts'
 
 const story = {
   format: 'taleforge.story.v1',
@@ -439,4 +441,132 @@ test('standard 模块带着"文字代画面"的三条：定镜、连续场景、
   // 未声明 standard 的剧本不该拿到它们
   const bare = renderPersona(storySchema.parse({ ...story, craft: { modules: [], rules: [] } }))
   assert.doesNotMatch(bare, /动笔先立定镜/)
+})
+
+/**
+ * 坏源隔离：compileAll 跑在 BFF 的启动路径上（模块顶层），一个剧本抛异常就是
+ * 进程退出 + 容器无限重启，连进 WebUI 删掉它都做不到，只能上服务器手删。
+ * 所以坏的必须跳过、好的照常编译，且坏剧本的既有产出不得被当成"源已删除"回收。
+ */
+test('坏剧本不拖垮整批编译：好的照常上架，坏的跳过且旧产出保留', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const src = path.join(root, 'scenarios')
+    const out = path.join(root, 'out')
+    // 两部剧本先都好好编译一遍（"bad" 目录名排在 "good" 前面，验证坏的不会挡住后面的）
+    mkdirSync(path.join(src, 'bad'), { recursive: true })
+    mkdirSync(path.join(src, 'good'), { recursive: true })
+    writeFileSync(path.join(src, 'bad', 'story.json'), JSON.stringify({ ...story, id: 'story-bad' }))
+    writeFileSync(path.join(src, 'good', 'story.json'), JSON.stringify({ ...story, id: 'story-good' }))
+    compileAll(src, out)
+    assert.ok(existsSync(path.join(out, 'story-bad', 'agent.cordis.yml')))
+
+    // 一部剧本的源坏掉：schema 不再通过（id 还在，够抢救）
+    writeFileSync(path.join(src, 'bad', 'story.json'), JSON.stringify({ ...story, id: 'story-bad', title: undefined }))
+    const results = compileAll(src, out)
+
+    assert.deepEqual(results.filter(r => !r.failed && !r.removed).map(r => r.id), ['story-good'], '好剧本照常编译')
+    const failed = results.filter(r => r.failed)
+    assert.deepEqual(failed.map(r => r.id), ['story-bad'])
+    assert.match(failed[0].failed!, /title/, '失败原因要能指到具体字段')
+    assert.ok(existsSync(path.join(out, 'story-bad', 'agent.cordis.yml')), '坏源的既有产出不得被回收')
+    assert.ok(existsSync(path.join(out, 'story-good', 'agent.cordis.yml')))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('源文件 JSON 都坏了（写盘中断）：照样不崩，按目录名认领旧产出', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
+  try {
+    const src = path.join(root, 'scenarios')
+    const out = path.join(root, 'out')
+    mkdirSync(path.join(src, 'half'), { recursive: true })
+    writeFileSync(path.join(src, 'half', 'story.json'), JSON.stringify({ ...story, id: 'story-half' }))
+    compileAll(src, out)
+
+    writeFileSync(path.join(src, 'half', 'story.json'), '{"format":"taleforge.story.v1","id":"story-h')
+    const results = compileAll(src, out)
+
+    assert.equal(results.filter(r => r.failed).length, 1)
+    assert.ok(existsSync(path.join(out, 'story-half', 'agent.cordis.yml')), '截断的源不得让旧产出被回收')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/**
+ * 货架上新要同步三处声明面：schema（能力本身）、AUTHORING.md（外发包与手写剧本的唯一依据）、
+ * 工坊 persona（工坊 agent 创作剧本时的唯一依据）。少写一处的后果不是报错，是**这件货没人会用**——
+ * 已经漏过两次：mechanics.upkeep 漏了工坊 persona，工坊产出的剧本永远不会用周期收支；
+ * craft.intensity_words 两处都漏，drift.ts 的强度回灌事实上成了死代码。
+ *
+ * 纯字段名字符串匹配，是提醒装置不是严格证明：字段名在文档里出现 ≠ 说清楚了。
+ * 但它能挡住"加了 schema 就完事"这个真实发生过的失误。
+ */
+test('货架上新的三处声明面同步：craft/mechanics 的每个字段都要写进说明书与工坊 persona', () => {
+  const authoring = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../AUTHORING.md'),
+    'utf8',
+  )
+  const shape = (storySchema as unknown as {
+    shape: {
+      craft: { shape: Record<string, unknown> }
+      mechanics: { unwrap: () => { shape: Record<string, unknown> } }
+    }
+  }).shape
+  const fields = [
+    ...Object.keys(shape.craft.shape).map(k => `craft.${k}`),
+    ...Object.keys(shape.mechanics.unwrap().shape).map(k => `mechanics.${k}`),
+  ]
+  assert.ok(fields.length >= 10, '内省没拿到字段，检查已失效（zod 换版本了？）')
+
+  const missing = fields.flatMap((full) => {
+    const name = full.split('.')[1]
+    return [
+      ...(authoring.includes(name) ? [] : [`${full} → AUTHORING.md`]),
+      ...(WORKSHOP_PERSONA.includes(name) ? [] : [`${full} → 工坊 persona`]),
+    ]
+  })
+  assert.deepEqual(missing, [], `新字段没写进面向作者的文档，作者与工坊都不会知道它存在：\n${missing.join('\n')}`)
+})
+
+test('行动选项数由剧本声明：输出契约按它生成，缺省仍是四个', () => {
+  const four = renderPersona(storySchema.parse(story))
+  assert.match(four, /紧接着四行行动选项/)
+  assert.match(four, /^D\. /m)
+
+  const three = renderPersona(storySchema.parse({
+    ...story,
+    craft: { ...story.craft, action_options: 3 },
+  }))
+  assert.match(three, /紧接着三行行动选项/)
+  assert.match(three, /^C\. /m)
+  assert.doesNotMatch(three, /^D\. /m, '声明三个就不该出现 D')
+  assert.match(three, /三个选项各占一行/)
+
+  // 上限仍是 4：E 键留给自由输入
+  assert.throws(() => storySchema.parse({ ...story, craft: { ...story.craft, action_options: 5 } }))
+  assert.throws(() => storySchema.parse({ ...story, craft: { ...story.craft, action_options: 1 } }))
+})
+
+test('正文里出不出现机制数字由剧本定：系统流剧本能把限制解除', () => {
+  const withMech = {
+    ...story,
+    mechanics: {
+      resources: [{ id: 'hp', label: '体力', group: 'self', min: 0, max: 100, initial: 80, maxStep: 20, guidance: '战斗扣' }],
+      checks: { die: 'd20', guidance: '危险行动必掷' },
+    },
+  }
+  const hidden = renderPersona(storySchema.parse(withMech))
+  assert.match(hidden, /不出现任何数字和机制词/)
+  assert.match(hidden, /正文里不出现点数与难度数字/)
+
+  const shown = renderPersona(storySchema.parse({
+    ...withMech,
+    craft: { ...story.craft, numbers_in_prose: true },
+  }))
+  assert.match(shown, /直接写出数值与机制词/)
+  assert.match(shown, /可以直接报出点数与难度/)
+  assert.doesNotMatch(shown, /不出现任何数字和机制词/)
 })

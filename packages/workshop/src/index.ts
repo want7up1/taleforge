@@ -336,6 +336,9 @@ export function apply(ctx: Context, config: Config) {
       },
     },
     output: {
+      // schema 是 additionalProperties: false：execute 返回的每一个键都要在这里声明，
+      // 漏一个（如写法体检的 warnings）整份输出会被 dsh 以 ToolOutputError 拒绝——
+      // 而剧本此时已经写盘编译完，GM 却收到"发布失败"，多半还会重发一遍。
       schema: {
         type: 'object',
         additionalProperties: false,
@@ -354,6 +357,7 @@ export function apply(ctx: Context, config: Config) {
               },
             },
           },
+          warnings: { type: 'array', items: { type: 'string' } },
           brief: { type: 'string', required: true },
         },
       },

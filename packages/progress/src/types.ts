@@ -16,6 +16,8 @@ export interface ActDef {
   title: string
   objective: string
   anchors: AnchorDef[]
+  /** 本幕的节奏容忍度：连续多少个正戏回合无主线进展才开始加压（缺省 DEFAULT_PACE） */
+  pace?: number
 }
 
 export interface CastRef {

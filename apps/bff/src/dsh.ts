@@ -85,6 +85,8 @@ type FrameListener = (frame: MuxFrame) => void
 
 const listeners = new Set<FrameListener>()
 let ws: WebSocket | undefined
+/** 排好队的重连；它在场就说明"连接这件事已经有人管了"，别再开第二条 */
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 let reconnectDelay = 500
 let loggedUnknownShape = false
 
@@ -109,7 +111,23 @@ function extractFrame(raw: WebSocket.RawData): MuxFrame | undefined {
   return undefined
 }
 
+/**
+ * 连接 mux。**同时只能有一条**：listeners 是共享的，第二条连接会让同一帧被分发两遍——
+ * SSE 桥把每个 assistant/chunk 发两次，前端的 `seq > chunkFloor` 拦不住同 seq 的重复
+ * （chunkFloor 只在拉历史时推进），玩家看到的正文就是每段重复一遍；observer 那边则是
+ * 回合事件重复入 buffer、统计失真。
+ *
+ * 旧写法的漏洞在于 close 里 `ws = undefined` 之后要等退避定时器，而这期间来一个新订阅者
+ * （dsh 重启时前端 SSE 也在重连，正好撞上）就会看到 `!ws` 再开一条。实测：断开后累计 3 条
+ * 连接、活跃 2 条、每帧触发 4 次回调。所以这里认两个状态——已有连接、或已排好重连。
+ * 新订阅者到来时不必干等退避（最长 15s）：把排队的重连提前执行即可，唯一性照旧。
+ */
 function connectMux(): void {
+  if (ws) return
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = undefined
+  }
   ws = new WebSocket(`${DSH_WS_BASE}/api/events.mux`)
   ws.on('open', () => {
     reconnectDelay = 500
@@ -125,13 +143,19 @@ function connectMux(): void {
   })
   ws.on('close', () => {
     ws = undefined
-    setTimeout(connectMux, reconnectDelay)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined
+      connectMux()
+    }, reconnectDelay)
+    // unref：这条定时器不该拦着进程退出（BFF 有 http server 保活；测试里没有）
+    reconnectTimer.unref?.()
     reconnectDelay = Math.min(reconnectDelay * 2, 15_000)
   })
 }
 
 export function onMuxFrame(listener: FrameListener): () => void {
   listeners.add(listener)
-  if (!ws) connectMux()
+  // 唯一性由 connectMux 自己守；这里只管"确保连接这件事有人在做"
+  connectMux()
   return () => listeners.delete(listener)
 }

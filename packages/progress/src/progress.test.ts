@@ -222,3 +222,18 @@ test('周期收支每回合只滚一次：同回合重复上报不重复结算',
   state = reduceEvent(state, { type: 'turn/start', data: {} }, acts)
   assert.equal(state.turn > (state.lastUpkeepTurn ?? 0), true)
 })
+
+test('节奏容忍度由剧本按幕声明：慢热的幕不该被平台按默认阈值催', () => {
+  const events = [turnStart, report(['a1'])]
+  for (let i = 0; i < 8; i++) events.push(turnStart, report([]))
+  const state = foldEvents(acts, events)
+  assert.equal(pressureOf(state).stalledTurns, 8)
+
+  // 平台缺省（4/8）：这时已经进高档，会要求"行动选项 A 必须是主线前进位"
+  assert.equal(pressureOf(state).level, 'high')
+  // 序幕声明自己慢热：同样停滞 8 回合，仍然不加压
+  assert.equal(pressureOf(state, 12).level, 'low', '剧本说了这一幕要慢慢铺，平台就不该催')
+  // 声明得比缺省更紧的幕，加压来得更早
+  assert.equal(pressureOf(state, 2).level, 'high')
+  assert.equal(pressureOf(state, 8).level, 'rising')
+})

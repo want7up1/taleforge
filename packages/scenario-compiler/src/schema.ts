@@ -30,6 +30,14 @@ export const actSchema = z.object({
    * 与 GM 生成点都看不到（天然防剧透）。没写的幕回落到 craft.reminder。
    */
   reminder: z.string().min(1).max(600).optional(),
+  /**
+   * 本幕的节奏容忍度：连续多少个正戏回合没有主线进展，平台才开始在进度简报里加压
+   * （两倍即进高档：要求行动选项 A 必须是主线前进位）。缺省 4。
+   *
+   * **慢热的幕要把它写大。** 平台拿一个固定阈值催所有剧本，等于替剧本决定"多慢算慢"：
+   * 序幕本来就该花十几个回合铺人物与日常，默认阈值会把它催成速通（实测发生过）。
+   */
+  pace: z.number().int().positive().optional(),
 })
 
 /** 平台工艺货架上的模块名。上新货在 persona.ts 的 CRAFT_MODULES 里加，同时更新此枚举。 */
@@ -196,6 +204,20 @@ export const storySchema = z.object({
     modules: z.array(z.enum(craftModuleNames)),
     /** 内容强度声明，直接决定 GM 写到什么程度。 */
     rating: z.string().optional(),
+    /**
+     * 每回合行动块给几个选项（2–4，缺省 4）。上限 4 是硬的：字母 E 留给"自由输入"这个固定按键。
+     * 但**下限不该由平台定**——聚焦的悬疑或高压场面，三个选项比四个更有力，
+     * 凑第四个只会凑出"再看看情况"这类空话。
+     */
+    action_options: z.number().int().min(2).max(4).default(4),
+    /**
+     * 正文里能不能直接出现机制数字与机制词（"力量 +5"、"好感度 80"、掷骰点数、等级与经验）。
+     *
+     * 缺省 false：数值变化写成可感的情节，数字交给面板与卡片呈现。**但这是文风不是结构**——
+     * 系统流、面板流那一类剧本要的恰恰是正文里跳出数字，平台不该替它们决定。
+     * 声明 true 的剧本，机制面板、判定、经验三处的"不出现数字"一并解除。
+     */
+    numbers_in_prose: z.boolean().default(false),
     /** 本剧本自带的工艺指令。剧本对"怎么写"有绝对自由度。 */
     rules: z.array(z.string()).default([]),
     /**

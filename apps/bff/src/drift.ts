@@ -55,14 +55,26 @@ export function intensityHits(text: string, words: readonly string[]): number {
 
 /**
  * 按最近若干回合的事实生成注入行；一切达标就返回空数组（不注入）。
+ *
+ * 两项检查都以**剧本自己的声明**为前提，平台不自带任何文风要求：
+ * 强调标记那条查的是 standard 模块里写的"每回合 2–4 处"，所以只对选用了
+ * standard 的剧本生效——没选它的剧本（乃至 modules 为空的纯底座剧本）本来就没
+ * 承诺过要用标记，平台每两回合催一次是在替剧本决定文风；
+ * 强度词表那条查的是剧本自己填的 intensity_words，不声明就不查。
+ *
  * @param recent - 最近的回合事实，**新的在前**（recent[0] 是刚结束的那回合）。
  * @param words - 剧本声明的强度词表；没声明就不查这一项。
+ * @param checkMarkers - 剧本是否选用了带标记工艺的模块（standard）；否则不查强调标记。
  */
-export function driftNotes(recent: readonly TurnFact[], words: readonly string[] = []): string[] {
+export function driftNotes(
+  recent: readonly TurnFact[],
+  words: readonly string[] = [],
+  checkMarkers = false,
+): string[] {
   const plays = recent.filter(t => t.kind === 'play')
   const notes: string[] = []
 
-  const markerRun = plays.slice(0, MARKER_STREAK)
+  const markerRun = checkMarkers ? plays.slice(0, MARKER_STREAK) : []
   if (markerRun.length === MARKER_STREAK && markerRun.every(t => t.markers < MARKER_FLOOR)) {
     // 倒着念，读起来是时间顺序："上两回合 1 处、0 处"
     const counts = markerRun.map(t => t.markers).reverse().join(' 处、')

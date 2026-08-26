@@ -63,8 +63,12 @@ export function factsOf(sessionId: string): readonly TurnFact[] {
   return recentFacts.get(sessionId) ?? []
 }
 
-/** 对一个完整回合（turn/start..turn/end 的事件序列）做结构检查。纯函数，可离线跑历史存档。 */
-export function inspectTurn(sessionId: string, events: ObservedEvent[]): TurnRecord {
+/**
+ * 对一个完整回合（turn/start..turn/end 的事件序列）做结构检查。纯函数，可离线跑历史存档。
+ * @param expectedOptions - 该剧本声明的行动选项数（craft.action_options）；数量由剧本定，
+ *   平台不再假定一定是 4，取不到就按缺省 4 记。
+ */
+export function inspectTurn(sessionId: string, events: ObservedEvent[], expectedOptions = 4): TurnRecord {
   const end = events.find(e => e.type === 'turn/end')
   const endData = end?.data as { turn?: number; reason?: { kind?: string } } | undefined
   const reasonKind = endData?.reason?.kind
@@ -136,7 +140,7 @@ export function inspectTurn(sessionId: string, events: ObservedEvent[]): TurnRec
     base.violations.push('缺少行动块')
   } else {
     const opts = visible.match(/^\s*[A-D][.、．]\s*\S/gm)?.length ?? 0
-    if (opts < 4) base.violations.push(`行动选项不足（${opts}/4）`)
+    if (opts < expectedOptions) base.violations.push(`行动选项不足（${opts}/${expectedOptions}）`)
   }
 
   base.info.ending = ending
@@ -153,8 +157,12 @@ export function inspectTurn(sessionId: string, events: ObservedEvent[]): TurnRec
   return base
 }
 
-/** 挂上共享 mux：按会话缓冲整回合事件，turn/end 时检查并落一行 JSONL。 */
-export function startObserver(dshHome: string): void {
+/**
+ * 挂上共享 mux：按会话缓冲整回合事件，turn/end 时检查并落一行 JSONL。
+ * @param optionsOf - 按会话取该剧本声明的行动选项数；同步查（回调在 mux 帧里跑），
+ *   取不到返回 undefined 即按缺省。
+ */
+export function startObserver(dshHome: string, optionsOf?: (sessionId: string) => number | undefined): void {
   const logPath = path.join(dshHome, 'observer.jsonl')
   const buffers = new Map<string, ObservedEvent[]>()
 
@@ -171,7 +179,7 @@ export function startObserver(dshHome: string): void {
     buffer.push(event)
     if (event.type !== 'turn/end') return
     buffers.delete(sid)
-    const record = inspectTurn(sid, buffer)
+    const record = inspectTurn(sid, buffer, optionsOf?.(sid) ?? 4)
     const facts = recentFacts.get(sid) ?? []
     facts.unshift({
       kind: record.kind,

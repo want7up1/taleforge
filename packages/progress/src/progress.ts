@@ -102,9 +102,20 @@ export function applyReport(state: ProgressState, acts: ActDef[], ids: string[])
   return { state: next, accepted, ignored, advancedTo, ended }
 }
 
-export function pressureOf(state: ProgressState): { level: PressureLevel; stalledTurns: number } {
+/**
+ * 缺省的节奏容忍度：连续这么多个正戏回合没有主线进展就开始加压，两倍即进高档。
+ * 这只是**缺省值**——每幕可以用 `acts[].pace` 自己定。平台拿一个固定阈值去催所有剧本，
+ * 等于替剧本决定"多慢算慢"：慢热的序幕本来就该花十几个回合铺，而它会被催成速通。
+ */
+export const DEFAULT_PACE = 4
+
+export function pressureOf(
+  state: ProgressState,
+  pace: number = DEFAULT_PACE,
+): { level: PressureLevel; stalledTurns: number } {
   const stalledTurns = Math.max(0, state.turn - state.lastProgressTurn)
-  const level: PressureLevel = stalledTurns >= 8 ? 'high' : stalledTurns >= 4 ? 'rising' : 'low'
+  const rising = pace > 0 ? pace : DEFAULT_PACE
+  const level: PressureLevel = stalledTurns >= rising * 2 ? 'high' : stalledTurns >= rising ? 'rising' : 'low'
   return { level, stalledTurns }
 }
 

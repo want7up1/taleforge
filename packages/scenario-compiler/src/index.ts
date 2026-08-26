@@ -19,6 +19,8 @@ export interface CompileResult {
   presetDir: string
   /** 源已删除，该 preset 被回收 */
   removed?: boolean
+  /** 源损坏（JSON 坏了或不过 schema），已跳过；既有编译产出原样保留 */
+  failed?: string
 }
 
 export function loadStory(storyDir: string): Story {
@@ -133,6 +135,24 @@ export function compileScenario(
   return { id: story.id, title: story.title, presetDir }
 }
 
+const STORY_ID = /^story-[a-z0-9][a-z0-9-]*$/
+
+/**
+ * 坏源属于哪个剧本 id——只为把它的既有编译产出排除在回收之外，别无用途。
+ * 先从原始 JSON 里抢救 id（schema 不过时 JSON 通常还读得出来，这一手最准），
+ * 抢救不到再按目录名推断：publishStory 与删剧本都按 `story-<目录名>` 这条约定写。
+ * 两者都拿不到合法 id 时返回目录名推断值——最坏留一个孤儿 preset，好过误删产出。
+ */
+function salvageId(storyDir: string, dirName: string): string {
+  try {
+    const raw = JSON.parse(readFileSync(path.join(storyDir, 'story.json'), 'utf8')) as { id?: unknown }
+    if (typeof raw.id === 'string' && STORY_ID.test(raw.id)) return raw.id
+  } catch {
+    // JSON 本身就坏了（写盘中断等），回落目录名
+  }
+  return `story-${dirName}`
+}
+
 /**
  * 把剧本源同步到 presetsRoot：编译现存的，清理源里已删除的。
  * 只回收 story- 前缀的目录——那是本编译器的产出，其余 preset 一律不碰。
@@ -153,13 +173,25 @@ export function compileAll(
       if (!entry.isDirectory()) continue
       const storyDir = path.join(root, entry.name)
       if (!existsSync(path.join(storyDir, 'story.json'))) continue
-      const result = compileScenario(storyDir, presetsRoot, entries)
-      byId.set(result.id, result)
+      try {
+        const result = compileScenario(storyDir, presetsRoot, entries)
+        byId.set(result.id, result)
+      } catch (err) {
+        // 一部剧本的源坏了不能拖垮整台机器：这里是 BFF 的启动路径，抛出去就是进程退出 +
+        // 容器无限重启，连删掉它的 WebUI 都进不去，只能上服务器手删。坏的跳过、其余照常，
+        // 平台起得来用户才有得救。
+        const id = salvageId(storyDir, entry.name)
+        const prior = byId.get(id)
+        if (!prior || prior.failed) {
+          byId.set(id, { id, title: '', presetDir: path.join(presetsRoot, id), failed: String(err) })
+        }
+      }
     }
   }
   const results = [...byId.values()]
 
   if (existsSync(presetsRoot)) {
+    // 源损坏的剧本也在 results 里（failed），因此同样算"活着"——它的产出不回收
     const live = new Set(results.map(r => r.id))
     for (const entry of readdirSync(presetsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory() || !entry.name.startsWith('story-') || live.has(entry.name)) continue

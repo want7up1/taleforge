@@ -31,13 +31,20 @@ import {
   type PointAllocation,
   type ProgressionView,
 } from './progression.ts'
-import { applyChanges, effectiveNumericDefs, foldApplied, initialState } from './resources.ts'
 import {
-  isAttributesResult,
+  applyChanges,
+  effectiveNumericDefs,
+  foldApplied,
+  foldNumericEvents,
+  initialState,
+  reduceNumericEvent,
+  type NumericProjState,
+} from './resources.ts'
+import {
   isInventoryResult,
-  isMechanicsResult,
   isPointsResult,
   isXpResult,
+  metaOf,
   type AppliedChange,
   type AppliedInventoryChange,
   type AttributeDef,
@@ -194,7 +201,6 @@ export function apply(ctx: Context, config: Config) {
     defs: resources,
     catalogLine: d => `- \`${d.id}\`（${(d as ResourceDef).label}，${d.min}–${d.max}，单次最多 ±${d.maxStep}）`,
     labelOf: id => resources.find(r => r.id === id)?.label ?? id,
-    pick: isMechanicsResult,
     description: '在剧情推进的同时记录本回合的数值变化。',
   })
 
@@ -206,7 +212,6 @@ export function apply(ctx: Context, config: Config) {
     defs: attributes,
     catalogLine: d => `- \`${d.id}\`（${(d as AttributeDef).label}，${d.min}–${d.max}，单次最多 ±${d.maxStep}）`,
     labelOf: id => attributes.find(a => a.id === id)?.label ?? id,
-    pick: isAttributesResult,
     description: '属性只在剧本 guidance 允许的重大事件时变动，频率远低于资源。',
   })
 
@@ -253,8 +258,8 @@ export function apply(ctx: Context, config: Config) {
         if (attrId) {
           const def = attributes.find(a => a.id === attrId)
           if (!def) throw new Error(`未知属性 id：${attrId}`)
-          const state = readNumeric(attributes, exec.agent.session.events, isAttributesResult)
-          attrValue = state[attrId]?.value ?? def.initial
+          const { values } = foldNumericEvents(attributes, exec.agent.session.events, 'attribute')
+          attrValue = values[attrId]?.value ?? def.initial
         }
         const result = resolveCheck({
           die: checks.die,
@@ -474,8 +479,9 @@ export function apply(ctx: Context, config: Config) {
       execute(args, exec) {
         if (!exec.agent) throw new Error('spend_points 需要一个归属会话')
         const events = exec.agent.session.events
-        const defs = effectiveNumericDefs(attributes, collectNumericRevisions(events), 'attribute')
-        const current = readNumeric(defs, events, isAttributesResult)
+        const folded = foldNumericEvents(attributes, events, 'attribute')
+        const defs = effectiveNumericDefs(attributes, folded.revisions, 'attribute')
+        const current = folded.values
         const prog = readProgression(events)
         const unspent = prog.granted - prog.spent
         const proposed = (Array.isArray(args.allocations) ? args.allocations : []) as PointAllocation[]
@@ -520,10 +526,8 @@ export function apply(ctx: Context, config: Config) {
         schema: mechanicsSchema,
         init: (): NumericProjState => ({ values: initialState(resources), revisions: [] }),
         // 不认识的事件必须原样返回同一引用，registry 靠 Object.is 判断有没有变化
-        apply: (state: NumericProjState, event: { type: string; data: unknown }) => {
-          const rolled = applyUpkeepEvent(state, event, resources)
-          return rolled === state ? applyNumericEvent(state, event, isMechanicsResult, 'resource') : rolled
-        },
+        apply: (state: NumericProjState, event: { type: string; data: unknown }) =>
+          reduceNumericEvent(state, event, resources, 'resource'),
         view: (state: NumericProjState) => ({
           defs: effectiveNumericDefs(resources, state.revisions, 'resource'),
           state: state.values,
@@ -538,7 +542,7 @@ export function apply(ctx: Context, config: Config) {
         schema: attributesSchema,
         init: (): NumericProjState => ({ values: initialState(attributes), revisions: [] }),
         apply: (state: NumericProjState, event: { type: string; data: unknown }) =>
-          applyNumericEvent(state, event, isAttributesResult, 'attribute'),
+          reduceNumericEvent(state, event, attributes, 'attribute'),
         view: (state: NumericProjState) => ({
           defs: effectiveNumericDefs(attributes, state.revisions, 'attribute')
             .map(({ guidance: _g, ...visible }) => visible),
@@ -590,7 +594,6 @@ function registerNumericTool(ctx: Context, opts: {
   defs: NumericDef[]
   catalogLine: (d: NumericDef) => string
   labelOf: (id: string) => string
-  pick: (meta: unknown) => meta is { changes: AppliedChange[] }
   description: string
   /** 每正戏回合必调的工具挂行动块贴身提醒（低频工具不挂，避免噪音） */
   remindActionBlock?: boolean
@@ -664,137 +667,15 @@ function registerNumericTool(ctx: Context, opts: {
     execute(args, exec) {
       if (!exec.agent) throw new Error(`${opts.tool} 需要一个归属会话`)
       const events = exec.agent.session.events
+      // 与投影同一条重放路径（foldNumericEvents），周期收支与定义修订都在里面算好了
+      const folded = foldNumericEvents(opts.defs, events, opts.reviseTarget)
       // 裁决用现行定义：种子 + 场外修订（min/max/maxStep 等边界即时生效）
-      const defs = effectiveNumericDefs(opts.defs, collectNumericRevisions(events), opts.reviseTarget)
-      const current = readNumeric(defs, events, opts.pick, opts.reviseTarget === 'resource')
-      const { applied } = applyChanges(current, defs, args.changes as never)
+      const defs = effectiveNumericDefs(opts.defs, folded.revisions, opts.reviseTarget)
+      const { applied } = applyChanges(folded.values, defs, args.changes as never)
       return Promise.resolve({ changes: applied })
     },
     presentCall: () => ({ card: 'generic', title: opts.title, kind: 'other' }),
   }))
-}
-
-function metaOf<T>(
-  event: { type: string; data: unknown },
-  pick: (meta: unknown) => meta is T,
-): T | undefined {
-  if (event.type !== 'tool/result') return undefined
-  const meta = (event.data as { meta?: unknown }).meta
-  return pick(meta) ? meta : undefined
-}
-
-/** 投影内部状态：数值 + 已落账的定义修订（view 时折出现行定义）。 */
-interface NumericProjState {
-  values: ResourceState
-  revisions: NumericDefRevision[]
-}
-
-/** 周期收支声明的运行时形状（事实来源是 progress 包的 report_progress meta；不跨包引类型）。 */
-interface UpkeepMetaEntry {
-  id: string
-  delta: number
-  reason: string
-  activeAbove?: number
-}
-
-/**
- * 周期收支的折叠。report_progress 的 meta 只带**声明**——progress 插件不知道资源当前值，
- * 也不知道现行定义（改过名/改过边界的修订都在这边）。所以 clamp、maxStep 与 activeAbove
- * 全在这里算：这是既有的分工，数值裁决归代码，且只认代码算出来的结果。
- * 与投影约定一致：不该动时返回**同一个引用**，registry 靠 Object.is 判断有没有变化。
- */
-function dueUpkeep(values: ResourceState, event: { type: string; data: unknown }): UpkeepMetaEntry[] {
-  if (event.type !== 'tool/result') return []
-  const meta = (event.data as { meta?: { kind?: string; upkeep?: UpkeepMetaEntry[] } }).meta
-  if (meta?.kind !== 'progress/report' || !meta.upkeep?.length) return []
-  // activeAbove：值没过线就不滚（"种下之后才生长"）
-  return meta.upkeep.filter(e =>
-    e.activeAbove === undefined || (values[e.id]?.value ?? 0) > e.activeAbove)
-}
-
-function applyUpkeepEvent(
-  state: NumericProjState,
-  event: { type: string; data: unknown },
-  resources: ResourceDef[],
-): NumericProjState {
-  const due = dueUpkeep(state.values, event)
-  if (!due.length) return state
-  const defs = effectiveNumericDefs(resources, state.revisions, 'resource')
-  const { state: values } = applyChanges(state.values, defs, due)
-  return values === state.values ? state : { ...state, values }
-}
-
-function applyNumericEvent(
-  state: NumericProjState,
-  event: { type: string; data: unknown },
-  pick: (meta: unknown) => meta is { changes: AppliedChange[] },
-  target: 'resource' | 'attribute',
-): NumericProjState {
-  const revs = revisionsInEvent(event)?.filter(r => r.target === target)
-  if (revs?.length) return { ...state, revisions: [...state.revisions, ...revs] }
-
-  const batch = metaOf(event, pick)?.changes
-  if (!batch?.length) return state
-  const values = { ...state.values }
-  for (const change of batch) {
-    if (!(change.id in values)) continue
-    values[change.id] = { value: change.after, last: { applied: change.applied, reason: change.reason } }
-  }
-  return { ...state, values }
-}
-
-/**
- * 从事件里取数值定义修订。meta kind 'progress/revision' 的事实来源在 progress 包的
- * revise_setting——这里只认 resource/attribute 两类条目，其余忽略。
- */
-function revisionsInEvent(event: { type: string; data: unknown }): NumericDefRevision[] | undefined {
-  if (event.type !== 'tool/result') return undefined
-  const meta = (event.data as { meta?: { kind?: string; revisions?: unknown[] } }).meta
-  if (meta?.kind !== 'progress/revision' || !Array.isArray(meta.revisions)) return undefined
-  const hits = (meta.revisions as NumericDefRevision[]).filter(
-    r => r && (r.target === 'resource' || r.target === 'attribute') && typeof r.id === 'string',
-  )
-  return hits.length ? hits : undefined
-}
-
-function collectNumericRevisions(events: SessionEvents): NumericDefRevision[] {
-  const out: NumericDefRevision[] = []
-  for (const event of events) {
-    const revs = revisionsInEvent(event)
-    if (revs) out.push(...revs)
-  }
-  return out
-}
-
-/**
- * 从会话事件里读出当前数值状态（工具执行时用）。
- *
- * **必须与投影同源**：周期收支只带声明、由折叠方裁决，如果这里看不见它，
- * adjust_resources 就会拿一个偏旧的 before 去算 after，而投影又照单全收——
- * 结果就是"GM 动过的那几条资源，upkeep 被悄悄覆盖掉"（实测 grain 少扣了 8）。
- * 所以这里按事件顺序折叠，走和投影同一个 dueUpkeep 判定。
- */
-function readNumeric(
-  defs: NumericDef[],
-  events: SessionEvents,
-  pick: (meta: unknown) => meta is { changes: AppliedChange[] },
-  withUpkeep = false,
-): ResourceState {
-  let values = initialState(defs)
-  for (const event of events) {
-    const meta = metaOf(event, pick)
-    if (meta) {
-      for (const change of meta.changes) {
-        if (!(change.id in values)) continue
-        values = { ...values, [change.id]: { value: change.after, last: { applied: change.applied, reason: change.reason } } }
-      }
-      continue
-    }
-    if (!withUpkeep) continue
-    const due = dueUpkeep(values, event)
-    if (due.length) values = applyChanges(values, defs, due).state
-  }
-  return values
 }
 
 /** 从会话事件里读出经验/等级/点数账（经验 meta + 加点 meta 按序折叠）。 */

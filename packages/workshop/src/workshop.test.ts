@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { craftWarnings, listStories, listVersions, publishStory, readStory } from './index.ts'
+import { apply, craftWarnings, listStories, listVersions, publishStory, readStory } from './index.ts'
 import { storySchema } from '@taleforge/scenario-compiler'
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
 const story = {
   format: 'taleforge.story.v1',
@@ -176,4 +177,36 @@ test('写法体检不误报：时间词对比的是世界变迁而非人物归�
     cast: [{ id: 'npc-2', name: '乙', identity: '前顶流偶像明星，如今素面朝天依然美得发光。' }],
   }
   assert.deepEqual(craftWarnings(storySchema.parse(fine)), [], '末世前后的对比是正常写法')
+})
+
+/**
+ * 输出契约回归：execute 的返回值必须逐键通过工具自己声明的 output schema。
+ * dsh 在 createSuccessResult 里跑同一套校验，多一个未声明的键就整份输出被拒
+ * （ToolOutputError）——而剧本此时已经写盘编译完，GM 却收到"发布失败"。
+ * 上面那些体检用例测的是 publishStory 纯函数，绕过了这一层，所以单加一条。
+ */
+test('publish_story 输出契约：带写法体检提醒的返回值同样要过 dsh 的 schema 校验', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tf-ws-'))
+  try {
+    const config = { scenariosRoot: path.join(root, 'scenarios'), presetsRoot: path.join(root, 'presets') }
+    const tools: { name: string; output: { schema: unknown } }[] = []
+    apply({ tools: { register: (t: never) => tools.push(t) } } as never, config)
+    const schema = tools.find(t => t.name === 'publish_story')?.output.schema
+    assert.ok(schema, '没有注册 publish_story')
+
+    const clean = publishStory(config, story)
+    assert.equal(clean.ok, true)
+    assert.deepEqual(validateJsonSchemaValue(schema, clean, 'value'), [])
+
+    // 触发写法体检：发布照样成功，但返回值多带一个 warnings 键
+    const flagged = publishStory(config, {
+      ...story,
+      craft: { modules: ['standard'], rules: ['适时给玩家一点提示'] },
+    })
+    assert.equal(flagged.ok, true)
+    assert.ok(flagged.warnings?.length, '这条 rule 该被体检报出来')
+    assert.deepEqual(validateJsonSchemaValue(schema, flagged, 'value'), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
