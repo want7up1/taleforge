@@ -1,43 +1,41 @@
-/** 主界面 = 游戏列表：继续冒险一行 + 剧本卡（点击进详情）。会话与存档的管理都在剧本详情页。 */
+/** 剧本库：剧本卡列表，点击进详情。主页是标题画面（Title），这里只管挑剧本。 */
 import { Brand } from './Brand.tsx'
-import type { CredentialStatus, ScenarioSummary, SessionSummary } from './types.ts'
+import type { CredentialStatus, ScenarioSummary } from './types.ts'
 
 interface Props {
   scenarios: ScenarioSummary[]
-  sessions: SessionSummary[]
   credential?: CredentialStatus
   error?: string
   onOpenScenario: (id: string) => void
-  onResume: (session: SessionSummary) => void
-  onSettings: () => void
   onWorkshop: () => void
+  onSettings: () => void
+  onBack: () => void
 }
 
 export function Library({
   scenarios,
-  sessions,
   credential,
   error,
   onOpenScenario,
-  onResume,
-  onSettings,
   onWorkshop,
+  onSettings,
+  onBack,
 }: Props) {
   const blocked = credential && !credential.configured
-  const current = sessions[0]
 
   return (
     <div className="screen">
       <header className="topbar">
         <Brand />
-        <div className="crumbs"><b>游戏</b></div>
+        <div className="crumbs">
+          <b>剧本库</b>
+          {scenarios.length > 0 && <span>{scenarios.length} 部</span>}
+        </div>
         <div className="tools">
           <button onClick={onWorkshop} disabled={blocked} title="剧本工坊：创作新剧本、导入剧本">
             ✎<span className="t"> 工坊</span>
           </button>
-          <button className={blocked ? 'attention' : ''} onClick={onSettings}>
-            ▧<span className="t"> 设置{blocked ? ' ·未配置' : ''}</span>
-          </button>
+          <button onClick={onBack} title="返回主菜单">←<span className="t"> 主菜单</span></button>
         </div>
       </header>
 
@@ -50,25 +48,6 @@ export function Library({
             </div>
           )}
 
-          {current && (
-            <>
-              <h2 className="section-title">继续冒险</h2>
-              <div className="saves">
-                <button className="save-row" onClick={() => onResume(current)}>
-                  <span className="save-title">
-                    {current.projections?.values.title ?? '未命名进度'}
-                  </span>
-                  <span className="save-meta">
-                    {scenarios.find(sc => sc.id === current.agentPreset)?.name ?? current.agentPreset}
-                    {' · '}
-                    {new Date(current.updatedAt).toLocaleString()}
-                  </span>
-                </button>
-              </div>
-            </>
-          )}
-
-          <h2 className="section-title">剧本</h2>
           <div className="cards">
             {scenarios.map(sc => (
               <article

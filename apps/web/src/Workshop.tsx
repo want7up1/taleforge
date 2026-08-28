@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
+import { usePixelDialog } from './PixelDialog.tsx'
 import { foldHistory, lastSeqOf, mergeMessages, messageOfEvent, planResume } from './fold.ts'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { openSessionStream } from './stream.ts'
@@ -35,6 +36,7 @@ export function Workshop({
   exitLabel = '剧本库',
   resetConfirm = '重开工坊会丢弃当前访谈进度（已发布的剧本不受影响），确定吗？',
 }: Props) {
+  const dialog = usePixelDialog()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
   const [running, setRunning] = useState(false)
@@ -199,7 +201,9 @@ export function Workshop({
           )}
           <button
             onClick={() => {
-              if (confirm(resetConfirm)) onReset()
+              void dialog.confirm(resetConfirm, { danger: true, confirmLabel: '重开' }).then((ok) => {
+                if (ok) onReset()
+              })
             }}
             title="重开对话"
           >

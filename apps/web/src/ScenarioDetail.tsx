@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
+import { usePixelDialog } from './PixelDialog.tsx'
 import type { SessionSummary, StoryDetail } from './types.ts'
 
 interface SaveItem {
@@ -53,6 +54,7 @@ export function ScenarioDetail({
   const [saves, setSaves] = useState<SaveItem[]>([])
   const [versions, setVersions] = useState<{ name: string; savedAt: number; chars: number }[]>([])
   const [note, setNote] = useState<string>()
+  const dialog = usePixelDialog()
   /** 本剧本自己的进行中会话（current 可能属于别的剧本，那种只用于覆盖确认） */
   const mine = current?.agentPreset === story.id ? current : undefined
 
@@ -70,7 +72,11 @@ export function ScenarioDetail({
   }, [loadSaves])
 
   const remove = async () => {
-    if (!confirm(`删除《${story.title}》？剧本源、上架版本连同它的存档都会移除，建议先导出留底。`)) return
+    const typed = await dialog.prompt(
+      `删除《${story.title}》？剧本源、上架版本连同它的存档和修改对话都会一起移除，且不可恢复，建议先导出留底。`,
+      { title: '删除剧本', expect: story.title, placeholder: story.title, danger: true, confirmLabel: '删除' },
+    )
+    if (typed === null) return
     setNote('删除中…')
     try {
       await api.deleteScenario(story.id)
@@ -94,7 +100,7 @@ export function ScenarioDetail({
 
   const removeSession = async () => {
     if (!mine) return
-    if (!confirm('删除进行中的会话？此操作不可撤销（可先存档）。')) return
+    if (!(await dialog.confirm('删除进行中的会话？此操作不可撤销（可先存档）。', { danger: true, confirmLabel: '删除' }))) return
     try {
       await api.deleteSession(mine.sessionId)
       setNote('会话已删除')
@@ -105,7 +111,7 @@ export function ScenarioDetail({
   }
 
   const load = async (name: string) => {
-    if (current && !confirm('读档会覆盖当前进行中的会话，确定吗？')) return
+    if (current && !(await dialog.confirm('读档会覆盖当前进行中的会话，确定吗？', { confirmLabel: '读档' }))) return
     setNote('读档中…')
     try {
       const { sessionId } = await api.loadSave(name)
@@ -116,7 +122,7 @@ export function ScenarioDetail({
   }
 
   const removeSave = async (name: string) => {
-    if (!confirm('删除这份存档？')) return
+    if (!(await dialog.confirm('删除这份存档？', { danger: true, confirmLabel: '删除' }))) return
     try {
       await api.deleteSave(name)
       loadSaves()
@@ -126,7 +132,7 @@ export function ScenarioDetail({
   }
 
   const rollback = async (name: string) => {
-    if (!confirm('回滚到这个历史版本？当前版会先自动留档，回滚后还能滚回来。进行中的局仅贴身提醒等热字段随之变化，其余下一局生效。')) return
+    if (!(await dialog.confirm('回滚到这个历史版本？当前版会先自动留档，回滚后还能滚回来。进行中的局仅贴身提醒等热字段随之变化，其余下一局生效。', { confirmLabel: '回滚' }))) return
     setNote('回滚中…')
     try {
       const r = await api.restoreVersion(story.id, name)
@@ -136,6 +142,18 @@ export function ScenarioDetail({
     } catch (err) {
       setNote(String(err))
     }
+  }
+
+  /** 开局/重开：平台只有一个进行中的会话，无论它属于哪个剧本都会被覆盖，先问一声 */
+  const start = async () => {
+    if (current) {
+      const ok = await dialog.confirm(
+        mine ? '重新开始会丢弃当前进行中的会话（可先存档），确定吗？' : '开新局会覆盖当前进行中的会话（可先存档），确定吗？',
+        { danger: true, confirmLabel: mine ? '重新开始' : '覆盖并开始' },
+      )
+      if (!ok) return
+    }
+    onStart()
   }
 
   const mech = story.mechanics
@@ -172,14 +190,11 @@ export function ScenarioDetail({
           </section>
 
           <div className="card-actions detail-actions">
-            <button
-              disabled={blocked}
-              onClick={() => {
-                if (current && !confirm('开新局会覆盖当前进行中的会话（可先存档），确定吗？')) return
-                onStart()
-              }}
-            >
-              {current ? '覆盖并开始 ▸' : '开始游戏 ▸'}
+            {mine && (
+              <button className="primary" onClick={() => onResume(mine)}>▸ 继续冒险</button>
+            )}
+            <button className={mine ? 'ghost' : 'primary'} disabled={blocked} onClick={() => void start()}>
+              {mine ? '↺ 重新开始' : current ? '覆盖并开始 ▸' : '开始游戏 ▸'}
             </button>
             <button className="ghost" onClick={onEdit} disabled={blocked} title="唤起 GM 对话修改本剧本">✎ 修改剧本</button>
             <a className="ghost" href={`/app/scenarios/${story.id}/export`} title="导出剧本源（含 GM 暗线，看了会剧透）">⤓ 导出</a>

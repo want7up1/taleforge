@@ -6,10 +6,11 @@ import { Library } from './Library.tsx'
 import { Play } from './Play.tsx'
 import { ScenarioDetail } from './ScenarioDetail.tsx'
 import { Settings } from './Settings.tsx'
+import { Title, type PlatformHealth } from './Title.tsx'
 import { Workshop } from './Workshop.tsx'
 import type { CredentialStatus, ScenarioSummary, SessionSummary, StoryDetail } from './types.ts'
 
-type View = 'library' | 'settings' | 'play' | 'history' | 'workshop' | 'scenario' | 'edit'
+type View = 'home' | 'library' | 'settings' | 'play' | 'history' | 'workshop' | 'scenario' | 'edit'
 
 /**
  * 挂载前捕获的初始 hash。刷新恢复必须用它而不是现读 location.hash：下面的 hash 同步
@@ -23,7 +24,9 @@ const needsAsyncRestore = (hash: string) =>
   || hash.startsWith('#/scenario/') || hash.startsWith('#/edit/')
 
 export function App() {
-  const [view, setView] = useState<View>(initialHash === '#/settings' ? 'settings' : 'library')
+  const [view, setView] = useState<View>(
+    initialHash === '#/settings' ? 'settings' : initialHash === '#/library' ? 'library' : 'home',
+  )
   const restoring = useRef(needsAsyncRestore(initialHash))
   const [scenarios, setScenarios] = useState<ScenarioSummary[]>([])
   const [sessions, setSessions] = useState<SessionSummary[]>([])
@@ -38,6 +41,8 @@ export function App() {
   const [error, setError] = useState<string>()
   /** 服务端换了前端构建：页面开着不动就一直跑旧 JS，得提示玩家刷新 */
   const [stale, setStale] = useState(false)
+  /** 标题画面的状态灯：dsh 运行时是否就绪 */
+  const [health, setHealth] = useState<PlatformHealth>('checking')
   const baseBuild = useRef<string | undefined>(undefined)
 
   const refresh = useCallback(async () => {
@@ -66,12 +71,14 @@ export function App() {
     const check = async () => {
       if (document.hidden) return
       try {
-        const { build } = await api.health()
+        const { dsh, build } = await api.health()
+        setHealth(dsh ? 'online' : 'offline')
         if (!build) return
         if (baseBuild.current === undefined) baseBuild.current = build
         else if (build !== baseBuild.current) setStale(true)
       } catch {
-        // 探测失败不打扰玩家：网络断了自有别的提示
+        // 探测失败不弹提示，只让标题画面的状态灯变色
+        setHealth('offline')
       }
     }
     void check()
@@ -126,10 +133,10 @@ export function App() {
         return
       }
       const v = location.hash.replace(/^#\//, '') as View
-      if (!['library', 'settings', 'play', 'history', 'workshop'].includes(v)) return setView('library')
-      // 需要前置状态的界面缺状态时回退剧本库
-      if ((v === 'play' || v === 'history') && !active) return setView('library')
-      if (v === 'workshop' && !workshopId) return setView('library')
+      if (!['home', 'library', 'settings', 'play', 'history', 'workshop'].includes(v)) return setView('home')
+      // 需要前置状态的界面缺状态时回退标题画面
+      if ((v === 'play' || v === 'history') && !active) return setView('home')
+      if (v === 'workshop' && !workshopId) return setView('home')
       setView(v)
     }
     window.addEventListener('hashchange', onHash)
@@ -137,14 +144,14 @@ export function App() {
   }, [active, workshopId, detail, edit])
 
   // 刷新/深链恢复：带着 #/play、#/history、#/workshop、#/scenario/<id>、#/edit/<id> 打开时，
-  // 先拉齐前置状态再进对应界面（#/settings 在初始 state 里直接进）。
+  // 先拉齐前置状态再进对应界面（#/settings、#/library 在初始 state 里直接进）。
   // 恢复结束前 hash 同步 effect 保持沉默，否则恢复目标在挂载瞬间就被改写掉。
   useEffect(() => {
     if (!restoring.current) return
     const done = (restored: boolean) => {
       restoring.current = false
-      // 恢复不成（会话/剧本已不在）：地址静默改回剧本库，不多留一条浏览历史
-      if (!restored) history.replaceState(null, '', '#/library')
+      // 恢复不成（会话/剧本已不在）：地址静默改回标题画面，不多留一条浏览历史
+      if (!restored) history.replaceState(null, '', '#/home')
     }
     if (initialHash === '#/play' || initialHash === '#/history') {
       api.listSessions().then(async ({ items }) => {
@@ -231,10 +238,16 @@ export function App() {
         sessionId={active}
         story={story}
         onExit={() => {
-          setView('library')
+          setView('home')
           void refresh()
         }}
         onOpenHistory={() => setView('history')}
+        onOpenCamp={() => {
+          // 营地 = 本剧本的详情页：存档/读档/修改剧本都在那里，不必绕回主页
+          if (!story) return
+          setDetail(story)
+          setView('scenario')
+        }}
         onSessionReplaced={(next) => {
           setActive(next)
           void refresh()
@@ -258,7 +271,7 @@ export function App() {
       <Workshop
         sessionId={workshopId}
         onExit={() => {
-          setView('library')
+          setView('home')
           void refresh()
         }}
         onReset={() => {
@@ -324,7 +337,7 @@ export function App() {
           <Brand />
           <div className="crumbs"><b>设置</b></div>
           <div className="tools">
-            <button onClick={() => setView('library')}>← 剧本库</button>
+            <button onClick={() => setView('home')}>← 主菜单</button>
           </div>
         </header>
         <div className="scroll">
@@ -336,14 +349,29 @@ export function App() {
     )
   }
 
+  if (view === 'library') {
+    return (
+      <Library
+        scenarios={scenarios}
+        credential={credential}
+        error={error}
+        onOpenScenario={id => void openScenario(id)}
+        onSettings={() => setView('settings')}
+        onWorkshop={() => void enterWorkshop()}
+        onBack={() => setView('home')}
+      />
+    )
+  }
+
   return (
-    <Library
+    <Title
+      current={sessions[0]}
       scenarios={scenarios}
-      sessions={sessions}
       credential={credential}
+      health={health}
       error={error}
-      onOpenScenario={id => void openScenario(id)}
       onResume={s => void resumeSession(s)}
+      onLibrary={() => setView('library')}
       onSettings={() => setView('settings')}
       onWorkshop={() => void enterWorkshop()}
     />

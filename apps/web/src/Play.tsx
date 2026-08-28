@@ -35,11 +35,23 @@ interface Props {
   story?: StoryDetail
   onExit: () => void
   onOpenHistory: () => void
+  /** 营地：本剧本的详情页（存档/读档/修改剧本） */
+  onOpenCamp: () => void
   /** 重写回合会 fork 出新会话取代当前会话，由父组件切换 */
   onSessionReplaced: (sessionId: string) => void
 }
 
 const FREE_KEY = 'E'
+
+type ActionMode = 'act' | 'say' | 'story' | 'continue'
+/** 自由输入的四档（借自 Rpgforge）：只换提示与外包装，不碰 GM 契约；"继续"留空即可发 */
+const MODES: { key: ActionMode; label: string; hint: string; placeholder: string }[] = [
+  { key: 'act', label: '行动', hint: '做一件事', placeholder: '你要做什么？' },
+  { key: 'say', label: '对话', hint: '说一句话，会以「」引出', placeholder: '你要说什么？' },
+  { key: 'story', label: '叙述', hint: '把镜头推向某处、让某件事发生', placeholder: '接下来发生什么？例：门外传来脚步声' },
+  { key: 'continue', label: '继续', hint: '留空直接发送，让 GM 顺势往下写', placeholder: '留空即"继续推进剧情"，也可以补一句要求' },
+]
+const CONTINUE_TEXT = '继续推进剧情。'
 /** 工具轮的可见化文案：正文开流前玩家看到 GM 正在做什么 */
 const TOOL_PHASE: Record<string, string> = {
   report_progress: '核对剧情进度',
@@ -57,8 +69,17 @@ const isOffstageReply = (text: string) => /^\s*[（(]场外[)）]/.test(text)
 const isOffstageAsk = (text: string) => text.trimStart().startsWith(OFFSTAGE_PREFIX)
 const stripOffstage = (text: string) =>
   text.replace(/^\s*【场外】\s*/, '').replace(/^\s*[（(]场外[)）]\s*/, '')
+/** 按档位包装自由输入；手打的【场外】原样放行，照旧走场外协议 */
+const wrapByMode = (mode: ActionMode, text: string) => {
+  const t = text.trim()
+  if (mode === 'continue') return t || CONTINUE_TEXT
+  if (!t || isOffstageAsk(t)) return t
+  if (mode === 'say') return `你说：「${t.replace(/^[「"“]+|[」"”]+$/g, '')}」`
+  if (mode === 'story') return `（旁白：${t}）`
+  return t
+}
 
-export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplaced }: Props) {
+export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSessionReplaced }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
   const [running, setRunning] = useState(false)
@@ -81,6 +102,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
   const [check, setCheck] = useState<CheckMeta>()
   const [scene, setScene] = useState<string>()
   const [freeMode, setFreeMode] = useState(false)
+  const [inputMode, setInputMode] = useState<ActionMode>('act')
   /** 场外悬浮框开关；场外对话不进正文流 */
   const [gmOpen, setGmOpen] = useState(false)
   /** 当前生成中的回合是否由场外消息发起（刷新丢失时靠（场外）前缀兜底判断） */
@@ -446,6 +468,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
     setError(undefined)
     setFreeMode(false)
     setInput('')
+    setInputMode('act')
     // 自由行动里手打的【场外】走场外协议（不注入、不调工具），加点不能搭这班车
     const carryAlloc = Boolean(allocLine) && !isOffstageAsk(text)
     try {
@@ -519,6 +542,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
   const options = idle && !ended ? latest?.options ?? [] : []
   // GM 没按格式给选项时也要留出路，否则玩家无处可点
   const showFreeEntry = idle && !freeMode && !ended
+  const canSend = inputMode === 'continue' || Boolean(input.trim())
   const currentAct = progress?.acts[progress.actIndex]
   const turnNo = stats?.turns ?? 0
 
@@ -528,9 +552,9 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
         <Brand />
         <div className="crumbs">
           <b>{story?.title ?? '游戏'}</b>
-          {currentAct && <span>{ended ? '剧终' : currentAct.title}</span>}
-          {turnNo > 0 && <span>第 {turnNo} 回合</span>}
-          {scene && <span>{scene}</span>}
+          {currentAct && <span className="crumb-act">{ended ? '剧终' : currentAct.title}</span>}
+          {turnNo > 0 && <span className="crumb-turn">第 {turnNo} 回合</span>}
+          {scene && <span className="crumb-scene">{scene}</span>}
         </div>
         {progression && progression.display !== 'panel' && (
           <LevelStrip progression={progression} onClick={() => setDossier(true)} />
@@ -542,6 +566,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
           </button>
           <button onClick={() => setDossier(true)} title="卷宗">▤<span className="t"> 卷宗</span></button>
           <button onClick={onOpenHistory} title="回顾">▦<span className="t"> 回顾</span></button>
+          <button onClick={onOpenCamp} title="营地：存档、读档、修改剧本">⌂<span className="t"> 营地</span></button>
           <button onClick={onExit} title="离开">←<span className="t"> 离开</span></button>
         </div>
       </header>
@@ -741,24 +766,45 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onSessionReplace
 
           {freeMode && (
             <div className="composer">
+              <div className="mode-row">
+                <div className="mode-switch" aria-label="输入方式">
+                  {MODES.map(m => (
+                    <button
+                      key={m.key}
+                      type="button"
+                      className={m.key === inputMode ? 'on' : undefined}
+                      title={m.hint}
+                      onClick={() => {
+                        setInputMode(m.key)
+                        textareaRef.current?.focus()
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="mode-hint">{MODES.find(m => m.key === inputMode)?.hint}</span>
+              </div>
               <span className="prompt">&gt;</span>
               <textarea
                 ref={textareaRef}
                 value={input}
                 rows={2}
-                placeholder="你要做什么？"
+                placeholder={MODES.find(m => m.key === inputMode)?.placeholder}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault()
-                    void send(input)
+                    if (canSend) void send(wrapByMode(inputMode, input))
                   }
                   if (e.key === 'Escape') setFreeMode(false)
                 }}
               />
               <div className="composer-actions">
                 <button className="ghost" onClick={() => setFreeMode(false)}>取消</button>
-                <button onClick={() => void send(input)} disabled={!input.trim()}>发送 ▸</button>
+                <button onClick={() => void send(wrapByMode(inputMode, input))} disabled={!canSend}>
+                  {inputMode === 'continue' && !input.trim() ? '继续 ▸' : '发送 ▸'}
+                </button>
               </div>
             </div>
           )}
