@@ -2,7 +2,7 @@
  * TaleForge 平台服务（BFF）：托管 SPA、受控转发 dsh /api、mux→SSE 桥。
  * dsh 网关无认证且只信任 loopback，本服务是唯一对外入口。
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -16,9 +16,9 @@ import {
 import { listVersions, publishStory, versionsDirOf } from '@taleforge/workshop'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
-import { DshRpcError, channelRpc, onMuxFrame, rpc } from './dsh.ts'
+import { DshRpcError, onMuxFrame, rpc } from './dsh.ts'
 import { factsOf, startObserver } from './observer.ts'
-import { PROVIDER_QUIRKS, renderTurnHead, type ProjectionValues, type StoryHead } from './turn-head.ts'
+import { renderTurnHead, type ProjectionValues, type StoryHead } from './turn-head.ts'
 
 const PORT = Number(process.env.PORT ?? 31415)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -165,80 +165,6 @@ app.put('/app/sessions/:id/model', asyncRoute(async (req, res) => {
 /** 全局模型目录：登录订阅后新 provider 的模型会自动出现在这里，设置页据此渲染，不写死清单。 */
 app.get('/app/settings/models', asyncRoute(async (_req, res) => {
   res.json(await rpc('llm.models', {}))
-}))
-
-// ---- 设置：Grok 订阅登录 ----
-// 走 dsh-plugin-subscriptions 注册的 /subscriptions-auth 通道（OAuth 授权码 + PKCE）。
-// 令牌由插件自己存进 DSH_HOME/plugins/subscriptions/auth.json（0600、随数据卷持久化、到期自动刷新），
-// BFF 只做转发，不碰也不落任何令牌。插件没装时通道答 405，这里统一降级成 available:false。
-
-const SUBSCRIPTION_CHANNEL = '/subscriptions-auth'
-/** 本平台只用 Grok 订阅；插件同时支持 codex/claude，不在这里暴露。 */
-const SUBSCRIPTION_PROVIDER = 'grok'
-
-interface ProviderStatus {
-  loggedIn: boolean
-  busy: boolean
-  expiresAt?: number
-  account?: string
-  detail?: string
-}
-
-/** 通道调用的统一降级：插件未装时不报错，让设置页把入口藏起来。 */
-async function subscriptionCall<T>(endpoint: string, payload: unknown): Promise<T | undefined> {
-  try {
-    return await channelRpc<T>(SUBSCRIPTION_CHANNEL, endpoint, payload)
-  } catch (err) {
-    if (err instanceof DshRpcError && err.code === 'channel-unavailable') return undefined
-    throw err
-  }
-}
-
-app.get('/app/settings/subscription', asyncRoute(async (_req, res) => {
-  const value = await subscriptionCall<{ providers: Record<string, ProviderStatus> }>('status', {})
-  if (!value) {
-    res.json({ available: false })
-    return
-  }
-  res.json({ available: true, ...(value.providers[SUBSCRIPTION_PROVIDER] ?? { loggedIn: false, busy: false }) })
-}))
-
-/** 发起登录：立即返回授权链接，插件在后台等回调（默认 3 分钟）。 */
-app.post('/app/settings/subscription/login', asyncRoute(async (_req, res) => {
-  const value = await subscriptionCall<{ authorizeUrl: string }>('login', { provider: SUBSCRIPTION_PROVIDER })
-  if (!value) {
-    res.status(409).json({ error: { code: 'plugin-missing', message: '服务器未安装订阅登录插件' } })
-    return
-  }
-  res.json(value)
-}))
-
-/**
- * 兜底通道：回调地址指向 dsh 所在机器的 127.0.0.1:56121，浏览器在别的机器上就到不了。
- * 把授权后地址栏里的整条 URL（或其中的 code）贴回来，一样能完成兑换。
- */
-app.post('/app/settings/subscription/manual', asyncRoute(async (req, res) => {
-  const input = String((req.body ?? {}).input ?? '').trim()
-  if (!input) {
-    res.status(400).json({ error: { code: 'empty-input', message: '请粘贴回调 URL 或授权码' } })
-    return
-  }
-  const value = await subscriptionCall<{ ok: true }>('manual', { provider: SUBSCRIPTION_PROVIDER, input })
-  if (!value) {
-    res.status(409).json({ error: { code: 'plugin-missing', message: '服务器未安装订阅登录插件' } })
-    return
-  }
-  res.json(value)
-}))
-
-app.post('/app/settings/subscription/cancel', asyncRoute(async (_req, res) => {
-  await subscriptionCall('cancel', { provider: SUBSCRIPTION_PROVIDER })
-  res.json({ ok: true })
-}))
-
-app.delete('/app/settings/subscription', asyncRoute(async (_req, res) => {
-  await subscriptionCall('logout', { provider: SUBSCRIPTION_PROVIDER })
-  res.json({ ok: true })
 }))
 
 // ---- 会话管理 ----
@@ -575,17 +501,33 @@ interface SessionSummaryLite {
   blank: boolean
 }
 
-/** 物理删除 keep 之外的全部会话日志。dsh 没有删除 RPC，只能动文件。 */
+/**
+ * 把 keep 之外的全部会话日志挪出 dsh 的 sessions 目录（dsh 没有删除 RPC，只能动文件）。
+ * 挪到 `sessions-archive/` 而不是删：单存档语义靠"目录不在 sessions/ 里"就成立，
+ * 而被顶掉的那几十回合正文是唯一能拿来对照"改动前后写得怎样"的语料——
+ * 之前物理删除，用户玩过的 41 回合、35 回合整局一份原文都没留下。
+ */
 function pruneSessions(keep: Set<string>): number {
   const root = path.join(dshHome, 'sessions')
   if (!existsSync(root)) return 0
+  const archiveRoot = path.join(dshHome, 'sessions-archive')
   let removed = 0
   for (const bucket of readdirSync(root, { withFileTypes: true })) {
     if (!bucket.isDirectory()) continue
     const bucketDir = path.join(root, bucket.name)
     for (const entry of readdirSync(bucketDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || keep.has(entry.name)) continue
-      rmSync(path.join(bucketDir, entry.name), { recursive: true, force: true })
+      const from = path.join(bucketDir, entry.name)
+      const archiveDir = path.join(archiveRoot, bucket.name)
+      mkdirSync(archiveDir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const to = path.join(archiveDir, existsSync(path.join(archiveDir, entry.name)) ? `${entry.name}__${stamp}` : entry.name)
+      try {
+        renameSync(from, to)
+      } catch {
+        cpSync(from, to, { recursive: true })
+        rmSync(from, { recursive: true, force: true })
+      }
       removed++
     }
   }
@@ -644,7 +586,7 @@ app.post('/app/sessions', asyncRoute(async (req, res) => {
   // 单存档：新局一旦建立，旧局连同调试残留一并清除；工坊与修改对话保留
   const keep = new Set([created.sessionId, ...shielded])
   const removed = pruneSessions(keep)
-  if (removed > 0) console.log(`[bff] 开新局，清除旧存档 ${removed} 个`)
+  if (removed > 0) console.log(`[bff] 开新局，旧存档归档 ${removed} 个（移入 sessions-archive，未删除）`)
   res.json(created)
 }))
 
@@ -801,21 +743,8 @@ app.get('/app/sessions/:id/history', asyncRoute(async (req, res) => {
  * 追加为玩家消息的第二个文本块，回合开头就贴在生成点旁，不再依赖工具被调用。
  * 前端按【回合流程】前缀隐藏此块；场外消息与工坊会话不注入。
  *
- * 组装本身是纯函数（turn-head.ts，有测试）；这里只负责取三样 IO：面板快照、
- * 当前 provider 的适配段、剧本 story.json。
+ * 组装本身是纯函数（turn-head.ts，有测试）；这里只负责取两样 IO：面板快照、剧本 story.json。
  */
-
-/** 当前会话实际在跑的 provider 对应的适配段；模型可中途切换，所以每回合现取不缓存。 */
-async function quirkOf(sessionId: string): Promise<string> {
-  try {
-    const { current } = await rpc<{ current?: { provider?: string } }>('session.models', { sessionId })
-    return (current?.provider ? PROVIDER_QUIRKS[current.provider] : undefined) ?? ''
-  } catch (err) {
-    // 拿不到就不注入——注入永远不能挡住回合本身
-    console.warn(`[bff] 模型适配段取用失败（${sessionId}）：${String(err)}`)
-    return ''
-  }
-}
 
 const presetCache = new Map<string, string | undefined>()
 async function presetOf(sessionId: string): Promise<string | undefined> {
@@ -876,7 +805,6 @@ async function turnHeadBlock(sessionId: string, playerText: string): Promise<{ t
       values,
       playerText,
       story: storyHeadOf(preset),
-      quirk: await quirkOf(sessionId),
       recent: factsOf(sessionId),
     }),
   }

@@ -435,19 +435,21 @@ export function renderBrief(
     }
     lines.push(`当前：第 ${state.actIndex + 1} 幕《${act.title}》（第 ${state.turn} 回合）`)
     lines.push(`本幕目标：${act.objective}`)
+    // 只给"下一个主线事件"，不再整列待达成清单：这段文字是离生成点最近的槽位，
+    // 实测把全部锚点连完成信号一起摆在这里，正文就长成按清单打勾的巡视报告。
+    // 全部锚点与完成信号在 persona 的幕结构里，上报时对照那里。
     const remaining = remainingAnchors(state, acts)
-    if (remaining.length) {
-      lines.push('待达成锚点：')
-      for (const a of remaining) {
-        lines.push(`- [${a.id}] ${a.text}${a.required ? '（必需）' : '（可选）'}${a.signal ? `｜完成信号：${a.signal}` : ''}`)
-      }
+    const next = remaining.find(a => a.required)
+    if (next) {
+      lines.push(`下一个主线事件：[${next.id}] ${next.text}${next.signal ? `｜完成信号：${next.signal}` : ''}`)
+    }
+    const others = remaining.filter(a => a !== next)
+    if (others.length) {
+      lines.push(`本幕其余锚点 ${others.length} 个（${others.map(a => a.id).join('、')}），完成信号见幕结构；不必这一章就碰。`)
     }
     const pressure = pressureOf(state, act?.pace)
-    if (pressure.level === 'rising') {
-      lines.push(`节奏：已 ${pressure.stalledTurns} 回合无主线进展——本回合至少一个行动选项直指某个未完成锚点。`)
-    } else if (pressure.level === 'high') {
-      lines.push(`节奏：停滞 ${pressure.stalledTurns} 回合——本回合必须把剧情推进到某个未完成锚点完成信号的临界点；`
-        + '行动选项 A 必须是主线前进位，不允许四个选项全是横向行动。')
+    if (pressure.level === 'high') {
+      lines.push(`节奏：已停滞 ${pressure.stalledTurns} 回合——这一章该让「下一个主线事件」真的发生，并让行动选项 A 直指它。`)
     }
   }
 

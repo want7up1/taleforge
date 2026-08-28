@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { PROVIDER_QUIRKS, allocationHint, panelLines, projectionOf, renderTurnHead } from './turn-head.ts'
+import { allocationHint, panelLines, projectionOf, renderTurnHead } from './turn-head.ts'
 import type { ProjectionValues } from './turn-head.ts'
 
 const mechanics = {
@@ -51,11 +51,11 @@ test('拿不到面板快照时不崩：只留流程与提醒，且不产出空�
   assert.doesNotMatch(text, /【经验】/)
 })
 
-test('模型适配段排在【回合流程】之前，与实测时的相对位置一致', () => {
-  const text = renderTurnHead({ values: {}, playerText: '继续', quirk: PROVIDER_QUIRKS.grok })
-  assert.ok(text.indexOf('【调用方式】') < text.indexOf('【回合流程】'), 'grok 适配段应在流程之前')
-  // 前端按【回合流程】这个标记整块隐藏（认标记不认位置），加适配段不能把标记挤没
-  assert.ok(text.includes('【回合流程】'))
+test('创作简报排在注入块最后一行，离生成点最近', () => {
+  const text = renderTurnHead({ values: {}, playerText: '继续' })
+  // 记账（流程/面板/提醒）在前，"写一整章"贴在最后——生成点最近的位置留给正文的形状
+  assert.ok(text.includes('【本章】'))
+  assert.ok(text.lastIndexOf('【本章】') > text.indexOf('【回合流程】'), '创作简报在流程之后')
 })
 
 test('【加点】行按属性显示名换算成 id，未知属性忽略并说明', () => {

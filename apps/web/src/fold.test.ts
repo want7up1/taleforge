@@ -93,10 +93,11 @@ test('planResume：拉取窗口内实时流开了新回合 → 保持生成中�
 test('回合头注入块永不显示给玩家——认【回合流程】标记，不认它在不在开头', () => {
   const player = { type: 'text', text: 'A. 拔刀' }
   const flow = { type: 'text', text: '\n\n【回合流程】先调 report_progress……' }
-  // 模型适配段（PROVIDER_QUIRKS）会拼在【回合流程】之前，整块首字符因此不再是【回合流程】
-  const quirked = { type: 'text', text: '\n\n【调用方式】必须用工具调用功能发出。\n【回合流程】先调 report_progress……' }
+  // 注入块前面可能还有别的段（前导空行等），整块首字符因此不一定是【回合流程】——
+  // 前端认标记不认位置，所以带前导内容的情形也要锁住
+  const prefixed = { type: 'text', text: '\n\n【经验】grant_xp 每回合都要调。\n【回合流程】先调 report_progress……' }
 
-  for (const [label, block] of [['纯流程块', flow], ['带适配段', quirked]] as const) {
+  for (const [label, block] of [['纯流程块', flow], ['带前导段', prefixed]] as const) {
     const msg = messageOfEvent({
       type: 'user/message', seq: 1, time: 0,
       data: { content: [player, block] },

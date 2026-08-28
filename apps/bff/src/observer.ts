@@ -43,12 +43,16 @@ const isOffstageReply = (text: string) => /^\s*[（(]场外[)）]/.test(text)
 /** 一个回合里玩家可见的正文：最后一条 assistant/message 的 text 块。 */
 export function visibleTextOf(events: ObservedEvent[]): string {
   let visible = ''
+  let withBlock = ''
   for (const e of events) {
     if (e.type !== 'assistant/message') continue
     const t = textOfBlocks((e.data as { message?: { content?: unknown } }).message?.content)
-    if (t) visible = t
+    if (!t) continue
+    visible = t
+    // 带行动块的那条才是玩家看的正文；工具返回后模型偶尔再补一句短话，不能拿它当正文
+    if (t.includes('【行动】')) withBlock = t
   }
-  return visible
+  return withBlock || visible
 }
 
 /**

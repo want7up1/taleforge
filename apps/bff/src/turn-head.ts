@@ -13,23 +13,11 @@ import { driftNotes, type TurnFact } from './drift.ts'
 export const TURN_FLOW_REMINDER = '【回合流程】先调 report_progress——每一回合都要调，只报往回合正文里已经达成的锚点（本回合才打算写的不算，下回合再报），无进展传空数组；有机制面板则接着用相应工具把本回合的全部变化结清；然后写正文，结尾必须有【行动】块（系统宣布终幕的回合除外）。'
 
 /**
- * 模型适配层：同一套 persona 在不同模型上的实测差异，按当前会话的 provider 现挑现注。
- * 放在【回合流程】之前（与实测时的相对位置一致），不进 persona——preset 在会话创建时
- * 锁定，而模型可以中途切换，写进 persona 会让两者对不上；放这里还能免掉 DeepSeek 的
- * 无谓约束（护栏 2：硬性禁令保持个位数）。不同模型本来就不共享 prefix cache，按模型
- * 分叉在这一层是免费的。
- *
- * grok：实测 grok-4.5 有六成概率把工具调用当正文写出来——```html 包着的函数调用文本，
- * 参数全对却不发 tool_call，于是整回合既没有正文也没有行动块，玩家只能打"继续"。
- * 用真实 persona 与工具定义直连重放：不加约束 5 次里 3 次翻车（与流式无关，是随机的），
- * 加上这段后连测 5/5 正常。新模型上架时照此流程实测，别照抄别的模型的病历。
+ * 创作简报，注入块的最后一行：回合头里离正文最近的位置，之前全是记账
+ * （流程、面板数字、加点指令），正文被这些清单带成了巡视报告。
+ * 只说三件事：一章的形状、篇幅、收在哪里。
  */
-export const PROVIDER_QUIRKS: Record<string, string> = {
-  grok: '【调用方式】report_progress、grant_xp、adjust_resources 等是真正的函数工具，'
-    + '必须用工具调用功能发出。绝不把调用写成正文里的文字或代码块——'
-    + '正文里出现函数名、花括号参数或代码围栏，这一回合就是废的。\n',
-}
-
+export const CHAPTER_BRIEF = '【本章】写一整章：一个连续场景从定镜写到落点，不少于 2000 字；先让读者看见人在哪，再让事发生，收在让人想按下一步的地方；结尾【行动】块。'
 
 export interface NumericSnapshot {
   defs: { id: string; label: string; group?: 'affinity' | 'self' | 'world' }[]
@@ -150,12 +138,10 @@ export function renderTurnHead(parts: {
   playerText: string
   /** 该剧本 story.json 里与注入有关的片段 */
   story?: StoryHead
-  /** 当前 provider 的适配段 */
-  quirk?: string
   /** 最近几回合的观测事实，新的在前 */
   recent?: readonly TurnFact[]
 }): string {
-  const { values, playerText, story, quirk = '', recent = [] } = parts
+  const { values, playerText, story, recent = [] } = parts
   let alloc = ''
   // 只有开了经验等级的剧本才有 spend_points；没开的剧本即便玩家手打【加点】也不注入
   const progression = projectionOf<ProjectionValues['progression']>(values, 'progression')
@@ -187,7 +173,8 @@ export function renderTurnHead(parts: {
     story?.craft?.modules?.includes('standard') ?? false,
   )
 
-  return `\n\n${quirk}${TURN_FLOW_REMINDER}${alloc}${panel}`
+  return `\n\n${TURN_FLOW_REMINDER}${alloc}${panel}`
     + `${reminder ? `\n【剧本提醒】${reminder}` : ''}`
     + (drift.length ? `\n${drift.join('\n')}` : '')
+    + `\n${CHAPTER_BRIEF}`
 }

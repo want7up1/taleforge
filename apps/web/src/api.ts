@@ -7,7 +7,6 @@ import type {
   ScenarioSummary,
   SessionSummary,
   StoryDetail,
-  SubscriptionStatus,
 } from './types.ts'
 
 async function json<T>(resPromise: Promise<Response>): Promise<T> {
@@ -48,29 +47,9 @@ export const api = {
       }),
     ),
 
-  /** 全局模型目录：登录 Grok 订阅后该 provider 的分组会自动出现。 */
+  /** 全局模型目录：当前只配置 DeepSeek（flash / pro）。 */
   modelCatalog: () =>
     json<Pick<ModelCatalog, 'groups'>>(fetch('/app/settings/models')),
-
-  subscription: () => json<SubscriptionStatus>(fetch('/app/settings/subscription')),
-
-  subscriptionLogin: () =>
-    json<{ authorizeUrl: string }>(fetch('/app/settings/subscription/login', { method: 'POST' })),
-
-  subscriptionManual: (input: string) =>
-    json<{ ok: true }>(
-      fetch('/app/settings/subscription/manual', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ input }),
-      }),
-    ),
-
-  subscriptionCancel: () =>
-    json<{ ok: true }>(fetch('/app/settings/subscription/cancel', { method: 'POST' })),
-
-  subscriptionLogout: () =>
-    json<{ ok: true }>(fetch('/app/settings/subscription', { method: 'DELETE' })),
 
   sessionModel: (sessionId: string) =>
     json<ModelCatalog>(fetch(`/app/sessions/${sessionId}/model`)),
