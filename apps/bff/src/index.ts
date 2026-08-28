@@ -162,9 +162,15 @@ app.put('/app/sessions/:id/model', asyncRoute(async (req, res) => {
   res.json(result)
 }))
 
-/** 全局模型目录：登录订阅后新 provider 的模型会自动出现在这里，设置页据此渲染，不写死清单。 */
+/**
+ * 全局模型目录：平台只兼容 DeepSeek。dsh 的 llm.models 会把 profile 里任何已装
+ * provider（如残留的订阅插件带来的 grok）都列出来，这里在平台边界只放行 deepseek
+ * 分组——不管服务器 profile 装了什么，设置页永远只出 DeepSeek。
+ */
 app.get('/app/settings/models', asyncRoute(async (_req, res) => {
-  res.json(await rpc('llm.models', {}))
+  const catalog = await rpc<{ groups?: { id: string }[] }>('llm.models', {})
+  const groups = (catalog.groups ?? []).filter(g => g.id.includes('deepseek'))
+  res.json({ ...catalog, groups })
 }))
 
 // ---- 会话管理 ----
