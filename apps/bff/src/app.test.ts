@@ -3,7 +3,7 @@
  * （packages/engine testkit），不花额度、不出网。
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -72,16 +72,26 @@ test('开局 → 回合 → 历史：选项在结算事件里，面板在投影�
   }
 })
 
-test('单存档：开新局把旧局归档（不删）；工坊会话不受影响', async () => {
+test('多局并存：开新局不影响旧局；冒险列表带回合与终局态；工坊常驻同一个会话', async () => {
   const t = await boot()
   try {
     const a = (await t.call('POST', '/app/sessions', { agentPreset: 'story-kit' })).body.sessionId
+    await t.call('POST', `/app/sessions/${a}/prompt`, { text: '（开始）' })
+    await t.engine.idle(a)
     const w = (await t.call('POST', '/app/workshop')).body.sessionId
     const b = (await t.call('POST', '/app/sessions', { agentPreset: 'story-kit' })).body.sessionId
-    assert.equal(t.store.exists(a), false)
-    assert.equal(t.store.exists(w), true)
-    assert.equal((await t.call('GET', '/app/sessions')).body.items[0].sessionId, b)
+    assert.equal(t.store.exists(a), true, '多存档：旧局还在')
+    const { body: games } = await t.call('GET', '/app/games')
+    assert.deepEqual(games.items.map((g: { sessionId: string }) => g.sessionId).sort(), [a, b].sort())
+    const ga = games.items.find((g: { sessionId: string }) => g.sessionId === a)
+    assert.equal(ga.turns, 1)
+    assert.equal(ga.phase, 'playing')
+    assert.equal(ga.actTitle, '初到')
+    assert.equal(ga.title, '《测试镇》')
     assert.equal((await t.call('POST', '/app/workshop')).body.sessionId, w, '工坊常驻同一个会话')
+    const { body: story } = await t.call('GET', `/app/sessions/${a}/story`)
+    assert.equal(story.title, '测试镇')
+    assert.equal(story.cast[0].secret, undefined, '开局快照同样剥掉暗线')
   } finally {
     t.close()
   }
@@ -109,25 +119,51 @@ test('忙时再发一条 409；重写上一回合保持会话 id', async () => {
   }
 })
 
-test('存档 / 读档 / 删档；删剧本在有局时 409，没局时连存档一起删', async () => {
+test('存档水晶：带名称备注存档、原地读档、删档；删局时日志归档、存档一并删除', async () => {
   const t = await boot()
   try {
     const id = (await t.call('POST', '/app/sessions', { agentPreset: 'story-kit' })).body.sessionId
     await t.call('POST', `/app/sessions/${id}/prompt`, { text: '（开始）' })
     await t.engine.idle(id)
-    const { body: saved } = await t.call('POST', `/app/sessions/${id}/backup`)
-    const { body: saves } = await t.call('GET', '/app/save-backups')
-    assert.equal(saves.items[0].agentPreset, 'story-kit')
-    assert.equal(saves.items[0].turns, 1)
+    const { body: saved } = await t.call('POST', `/app/sessions/${id}/saves`, { label: '进镇之前', note: '钥匙还没拿' })
+    assert.equal(saved.label, '进镇之前')
+    assert.equal(saved.turns, 1)
     await t.call('POST', `/app/sessions/${id}/prompt`, { text: 'A. 走' })
     await t.engine.idle(id)
-    assert.deepEqual((await t.call('POST', `/app/save-backups/${saved.name}/restore`)).body, { sessionId: id })
-    assert.equal(t.store.read(id).filter(e => e.type === 'chapter').length, 1)
-    assert.equal((await t.call('DELETE', '/app/scenarios/story-kit')).status, 409)
+    const { body: list } = await t.call('GET', `/app/sessions/${id}/saves`)
+    assert.deepEqual(list.items.map((x: { label: string; note?: string }) => [x.label, x.note]), [['进镇之前', '钥匙还没拿']])
+    const frames: string[] = []
+    t.engine.subscribe(id, f => frames.push(f.type))
+    assert.deepEqual((await t.call('POST', `/app/sessions/${id}/saves/${saved.name}/load`)).body, { sessionId: id })
+    assert.equal(t.store.read(id).filter(e => e.type === 'chapter').length, 1, '读档：这一局原地回到存档那一刻')
+    assert.ok(frames.includes('reset'), '在线的界面收到重置帧')
+    assert.equal((await t.call('DELETE', '/app/scenarios/story-kit')).status, 409, '还有冒险用着这部剧本')
     assert.equal((await t.call('DELETE', `/app/sessions/${id}`)).status, 200)
+    assert.equal(t.store.exists(id), false)
+    assert.equal(t.store.listBackups().length, 0, '删局时它的存档水晶一并删除')
+    assert.ok(readdirSync(path.join(t.home, 'v2', 'archive')).some(f => f.startsWith(id)), '日志归档而不是抹掉')
     assert.equal((await t.call('DELETE', '/app/scenarios/story-kit')).status, 200)
-    assert.equal((await t.call('GET', '/app/save-backups')).body.items.length, 0)
     assert.equal(existsSync(path.join(t.home, 'scenarios', 'kit')), false)
+  } finally {
+    t.close()
+  }
+})
+
+test('回退到第 N 回合：其后的回合截掉、不重跑，选项回到第 N 回合；从头重开清到开场之前', async () => {
+  const t = await boot()
+  try {
+    const id = (await t.call('POST', '/app/sessions', { agentPreset: 'story-kit' })).body.sessionId
+    for (const text of ['（开始）', 'A. 一', 'A. 二']) {
+      await t.call('POST', `/app/sessions/${id}/prompt`, { text })
+      await t.engine.idle(id)
+    }
+    assert.deepEqual((await t.call('POST', `/app/sessions/${id}/rewind`, { toTurn: 1 })).body, { sessionId: id })
+    const chapters = t.store.read(id).filter(e => e.type === 'chapter')
+    assert.deepEqual(chapters.map(c => c.data.turn), [1])
+    assert.equal(t.store.read(id).at(-1)!.type, 'turn/end', '回退到的是那一回合结束时（含它的结算与选项）')
+    assert.equal((await t.call('POST', `/app/sessions/${id}/rewind`, { toTurn: 5 })).status, 400)
+    await t.call('POST', `/app/sessions/${id}/restart`)
+    assert.deepEqual(t.store.read(id).map(e => e.type), ['session/created'])
   } finally {
     t.close()
   }

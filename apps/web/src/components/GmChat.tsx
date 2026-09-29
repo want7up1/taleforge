@@ -49,7 +49,7 @@ export function GmChat({ open, items, streaming, busy, onSend, onClose }: Props)
     <div className="gm-chat">
       <div className="gm-chat-head">
         <span className="gm-chat-title">场外 · GM</span>
-        <button className="ghost" onClick={onClose}>✕</button>
+        <button className="px-btn h-7 w-7 px-0 text-xs" onClick={onClose} type="button" aria-label="关闭场外对话">×</button>
       </div>
       <div className="gm-chat-list" ref={listRef}>
         {items.length === 0 && !streaming && (
@@ -62,14 +62,14 @@ export function GmChat({ open, items, streaming, busy, onSend, onClose }: Props)
           <div key={i} className={`gm-chat-msg ${m.role}`}>
             <span className="who">{m.role === 'you' ? '你' : 'GM'}</span>
             {m.role === 'gm'
-              ? <div className="body"><StoryMarkdown text={m.text} characters={[]} /></div>
+              ? <div className="body"><StoryMarkdown content={m.text} /></div>
               : <p>{m.text}</p>}
           </div>
         ))}
         {streaming && (
           <div className="gm-chat-msg gm">
             <span className="who">GM</span>
-            <div className="body"><StoryMarkdown text={streaming} characters={[]} /><span className="caret" /></div>
+            <div className="body"><StoryMarkdown content={streaming} showCaret /></div>
           </div>
         )}
         {busy && !streaming && <p className="gm-chat-hint">GM 正在回复…</p>}
@@ -90,7 +90,7 @@ export function GmChat({ open, items, streaming, busy, onSend, onClose }: Props)
             if (e.key === 'Escape') onClose()
           }}
         />
-        <button onClick={send} disabled={!input.trim() || busy}>▸</button>
+        <button className="px-btn px-btn-amber self-end" onClick={send} disabled={!input.trim() || busy} type="button">▸</button>
       </div>
     </div>
   )

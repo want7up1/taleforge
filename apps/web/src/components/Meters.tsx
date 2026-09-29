@@ -1,5 +1,5 @@
 /** 资源条的两种呈现：顶栏精简（只放主角自己的）与卷宗里的完整清单；外加等级条。 */
-import type { MechanicsSnapshot, ProgressionSnapshot, ResourceDef, ResourceValue } from './types.ts'
+import type { MechanicsSnapshot, ProgressionSnapshot, ResourceDef, ResourceValue } from '../types.ts'
 
 /** 等级进度：本级起点到下一级阈值之间走了多少 */
 export function levelPct(p: ProgressionSnapshot): number {
@@ -63,12 +63,12 @@ export function revealed(def: ResourceDef, knownCast?: Set<string>): boolean {
   return !def.revealWith || !knownCast || knownCast.has(def.revealWith)
 }
 
-/** 顶栏一行：剧本选定常驻的数值，玩家每回合决策的依据 */
+/** 顶栏下方一行：剧本选定常驻的数值，玩家每回合决策的依据 */
 export function MeterStrip({ snapshot, knownCast }: { snapshot: MechanicsSnapshot; knownCast?: Set<string> }) {
   const own = snapshot.defs.filter(d => placementOf(d) === 'strip' && revealed(d, knownCast))
   if (own.length === 0) return null
   return (
-    <div className="meter-strip">
+    <div className="contents">
       {own.map((def) => {
         const cell = snapshot.state[def.id]
         if (!cell) return null
@@ -98,8 +98,8 @@ export function MeterPanel({ snapshot, knownCast }: { snapshot: MechanicsSnapsho
           d.group === group && placementOf(d) !== 'hidden' && revealed(d, knownCast))
         if (defs.length === 0) return null
         return (
-          <section key={group}>
-            <h3>{snapshot.groups?.[group] ?? GROUP_TITLE[group]}</h3>
+          <section key={group} className="mt-3 first:mt-0">
+            <h3 className="px-label">{snapshot.groups?.[group] ?? GROUP_TITLE[group]}</h3>
             {defs.map((def) => {
               const cell = snapshot.state[def.id]
               return cell ? <Bar key={def.id} def={def} cell={cell} /> : null

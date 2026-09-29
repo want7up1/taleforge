@@ -1,6 +1,6 @@
 /**
  * 系统询问框：替代原生 confirm/prompt，与界面同一套像素皮肤（原生弹窗在手机 Safari 上是一块
- * 白色系统框，把 CRT 氛围整个打断）。Provider + hook，同一时刻只有一个询问；`expect` 用于
+ * 白色系统框，把 CRT 氛围整个打断）。外观移植自 Rpgforge。Provider + hook，同一时刻只有一个询问；`expect` 用于
  * 不可逆操作——必须原样输入指定文字才允许确认。借自 Rpgforge 的 PixelDialog 形态。
  */
 import {
@@ -132,22 +132,15 @@ function Dialog({ request, onDone }: { request: Request; onDone: () => void }) {
   }
 
   return (
-    <>
-      <div className="drawer-veil ask-veil" onClick={() => settle(false)} />
-      <div
-        className="modal ask"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ask-title"
-        ref={boxRef}
-        onKeyDown={onKeyDown}
-      >
-        <h2 id="ask-title">{request.opts.title ?? '系统询问'}</h2>
-        <p className="ask-message">{request.message}</p>
+    <div aria-modal="true" className="px-modal-overlay" role="dialog" aria-labelledby="ask-title">
+      <button aria-label="取消" className="absolute inset-0 cursor-default" onClick={() => settle(false)} type="button" />
+      <div className="px-modal max-w-md" ref={boxRef} onKeyDown={onKeyDown}>
+        <p className="px-heading text-sm" id="ask-title">{request.opts.title ?? '系统询问'}</p>
+        <p className="px-wrap mt-3 whitespace-pre-wrap text-sm leading-6 text-[color:var(--muted)]">{request.message}</p>
         {request.kind === 'prompt' && (
           <>
             <input
-              className="ask-input"
+              className="px-input mt-3"
               ref={inputRef}
               value={value}
               placeholder={request.opts.placeholder}
@@ -160,21 +153,22 @@ function Dialog({ request, onDone }: { request: Request; onDone: () => void }) {
                 }
               }}
             />
-            {expect && <p className="hint">原样输入「{expect}」才能确认。</p>}
+            {expect && <p className="mt-2 text-xs text-[color:var(--faint)]">原样输入「{expect}」才能确认。</p>}
           </>
         )}
-        <div className="modal-actions">
-          <button className="ghost" onClick={() => settle(false)}>取消</button>
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button className="px-btn" onClick={() => settle(false)} type="button">取消</button>
           <button
-            className={request.opts.danger ? 'danger' : undefined}
+            className={request.opts.danger ? 'px-btn px-btn-danger' : 'px-btn px-btn-primary'}
             ref={okRef}
             disabled={!ready}
             onClick={() => settle(true)}
+            type="button"
           >
-            {request.opts.confirmLabel ?? '确定'}
+            {request.opts.confirmLabel ?? '确认'}
           </button>
         </div>
       </div>
-    </>
+    </div>
   )
 }

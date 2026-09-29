@@ -2,7 +2,7 @@
  * TaleForge 平台服务：托管 SPA、剧本库、会话与存档、回合入口、SSE 推流。
  * 单进程——v2 起内核（packages/engine）就在本进程里，不再转发 dsh 网关。
  *
- * 路由与前端契约沿用旧版的 /app/*（35 条），SSE 沿用 `{type, seq, time, data}` 的事件信封。
+ * 路由都在 /app/* 下；SSE 沿用 `{type, seq, time, data}` 的事件信封。多局冒险并存，每局可存多个存档水晶。
  */
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -12,6 +12,7 @@ import {
   foldSession,
   phaseOf,
   publicEvent,
+  sessionView,
   type Frame,
 } from '@taleforge/engine'
 import { applyRevisionsToStory, isStoryId, scanCatalog, type CatalogEntry, type RevisionLike, type Story } from '@taleforge/scenario-compiler'
@@ -35,6 +36,13 @@ export interface AppDeps {
 }
 
 const notFound = (res: Response, message: string) => res.status(404).json({ error: { code: 'not-found', message } })
+
+/** 剧本的玩家可见部分：隐藏真相、人物暗线、设定条目只属于 GM。 */
+function publicStory(story: Story): Record<string, unknown> {
+  const { hidden_truths: _h, ...world } = story.world
+  const { lore: _l, ...rest } = story
+  return { ...rest, world, cast: story.cast.map(({ secret: _s, ...visible }) => visible) }
+}
 
 const asyncRoute
   = (handler: (req: Request, res: Response) => Promise<void> | void) =>
@@ -212,16 +220,10 @@ export function createApp(deps: AppDeps): express.Express {
       notFound(res, '剧本不存在')
       return
     }
-    const { hidden_truths: _h, ...world } = story.world
-    const { lore: _l, ...rest } = story
-    res.json({
-      ...rest,
-      world,
-      cast: story.cast.map(({ secret: _s, ...visible }) => visible),
-    })
+    res.json(publicStory(story))
   })
 
-  // ---- 会话 ----
+  // ---- 冒险（游戏会话）：多局并存，每局可存多个存档水晶 ----
 
   interface Listed { id: string; updatedAt: number; kind: string; storyId?: string; title: string; scenarioId?: string }
   const listed = (): Listed[] => store.list().map(s => ({
@@ -243,35 +245,57 @@ export function createApp(deps: AppDeps): express.Express {
   const writeEditMap = (map: Record<string, string>) => writeFileSync(deps.editMapPath, JSON.stringify(map))
 
   /**
-   * 单存档：平台同时只暴露一个进行中的游戏会话。开新局 / 读档时其余游戏会话**归档**
-   * （挪进 archive/，不删——被顶掉的整局正文是对照"改动前后写得怎样"的唯一语料）。
-   * 工坊与修改对话不受影响。
+   * 存档列表要的每局概况（回合、终局态、当前幕）得折叠整份日志才知道。按文件 mtime 缓存：
+   * 没动过的局不重算，存档页不会因为局多而变慢。
    */
-  const pruneGames = (keep: string) => {
-    let archived = 0
-    for (const s of listed()) {
-      if (s.kind !== 'game' || s.id === keep) continue
-      engine.cancel(s.id)
-      store.archive(s.id)
-      archived++
+  interface GameSummary { turns: number; phase: string; actTitle?: string; tagline?: string }
+  const summaries = new Map<string, { mtime: number; value: GameSummary }>()
+  const summaryOf = (s: Listed): GameSummary => {
+    const hit = summaries.get(s.id)
+    if (hit && hit.mtime === s.updatedAt) return hit.value
+    const state = foldSession(store.read(s.id))
+    const view = sessionView(state)
+    const value: GameSummary = {
+      turns: state.chapters[state.chapters.length - 1]?.turn ?? 0,
+      phase: phaseOf(state),
+      ...view.progress?.acts[view.progress.actIndex] ? { actTitle: view.progress.acts[view.progress.actIndex].title } : {},
+      ...state.created.story ? { tagline: state.created.story.tagline } : {},
     }
-    if (archived) console.log(`[bff] 单存档：旧局归档 ${archived} 个（移入 archive/，未删除）`)
+    summaries.set(s.id, { mtime: s.updatedAt, value })
+    return value
   }
 
-  const summary = (s: Listed) => ({
+  const gameItem = (s: Listed) => ({
     sessionId: s.id,
+    title: s.title,
+    storyId: s.storyId,
     updatedAt: s.updatedAt,
     running: engine.isRunning(s.id),
-    blank: false,
-    agentPreset: s.storyId,
-    projections: { asOfSeq: 0, values: { title: s.title } },
+    ...summaryOf(s),
   })
 
+  const gameOr404 = (res: Response, id: string): Listed | undefined => {
+    const s = listed().find(x => x.id === id && x.kind === 'game')
+    if (!s) notFound(res, '这局冒险不存在')
+    return s
+  }
+
+  /** 全部冒险，最近玩过的在前。 */
+  app.get('/app/games', (_req, res) => {
+    res.json({ items: listed().filter(s => s.kind === 'game').map(gameItem) })
+  })
+
+  /** 兼容旧接口：只给最近一局。 */
   app.get('/app/sessions', (_req, res) => {
     const game = listed().find(s => s.kind === 'game')
-    res.json({ items: game ? [summary(game)] : [] })
+    res.json({
+      items: game
+        ? [{ sessionId: game.id, updatedAt: game.updatedAt, running: engine.isRunning(game.id), blank: false, agentPreset: game.storyId, projections: { asOfSeq: 0, values: { title: game.title } } }]
+        : [],
+    })
   })
 
+  /** 开一局新冒险。多局并存：不影响其他进行中的冒险。 */
   app.post('/app/sessions', (req, res) => {
     const id = String((req.body as { agentPreset?: string } | undefined)?.agentPreset ?? '')
     const story = storyById(id)
@@ -279,11 +303,23 @@ export function createApp(deps: AppDeps): express.Express {
       notFound(res, '剧本不存在')
       return
     }
-    const sessionId = engine.createGame(story)
-    pruneGames(sessionId)
-    res.json({ sessionId, agentPreset: id })
+    res.json({ sessionId: engine.createGame(story), agentPreset: id })
   })
 
+  /** 这局冒险开局时锁定的剧本（玩家可见部分）：界面显示人物、世界都以它为准，不跟着剧本源变。 */
+  app.get('/app/sessions/:id/story', asyncRoute((req, res) => {
+    const story = engine.state(String(req.params.id)).created.story
+    if (!story) {
+      notFound(res, '这不是游戏会话')
+      return
+    }
+    res.json(publicStory(story))
+  }))
+
+  /**
+   * 删除一局：日志挪进 archive/（只归档不删——整局正文是对照"改动前后写得怎样"的语料），
+   * 这局的存档水晶一并删除。
+   */
   app.delete('/app/sessions/:id', (req, res) => {
     const id = String(req.params.id)
     const s = listed().find(x => x.id === id)
@@ -296,53 +332,83 @@ export function createApp(deps: AppDeps): express.Express {
       return
     }
     engine.cancel(id)
-    store.remove(id)
-    console.log(`[bff] 已删除会话 ${id}`)
+    store.archive(id)
+    for (const b of store.backupsOf(id)) store.removeBackup(b.name)
+    summaries.delete(id)
+    console.log(`[bff] 已删除冒险 ${id}（日志归档，存档水晶一并删除）`)
     res.json({ ok: true })
   })
 
-  // ---- 存档 ----
+  // ---- 存档水晶：某一局在某个时刻的整份日志；读档 = 这一局原地恢复到那一刻 ----
 
-  app.post('/app/sessions/:id/backup', asyncRoute((req, res) => {
+  const saveView = (b: ReturnType<typeof store.listBackups>[number]) => ({
+    name: b.name,
+    label: b.label ?? b.title ?? '未命名存档',
+    ...b.note ? { note: b.note } : {},
+    backedAt: b.backedAt,
+    turns: b.turns ?? 0,
+  })
+
+  app.get('/app/sessions/:id/saves', (req, res) => {
     const id = String(req.params.id)
+    if (!gameOr404(res, id)) return
+    res.json({ items: store.backupsOf(id).map(saveView) })
+  })
+
+  app.post('/app/sessions/:id/saves', asyncRoute((req, res) => {
+    const id = String(req.params.id)
+    if (!gameOr404(res, id)) return
+    if (engine.isRunning(id)) {
+      res.status(409).json({ error: { code: 'busy', message: 'GM 还在写这一回合——写完再存档' } })
+      return
+    }
+    const body = (req.body ?? {}) as { label?: string; note?: string }
     const state = engine.state(id)
+    const turns = state.chapters[state.chapters.length - 1]?.turn ?? 0
+    const label = String(body.label ?? '').trim() || `第 ${turns} 回合`
+    const note = String(body.note ?? '').trim()
     const meta = store.backup(id, {
       title: state.created.title,
       ...state.created.storyId ? { storyId: state.created.storyId } : {},
-      turns: state.progress.turn,
+      turns,
+      label,
+      ...note ? { note } : {},
     })
-    console.log(`[bff] 已存档 ${id} → ${meta.name}`)
-    res.json({ name: meta.name })
+    console.log(`[bff] 已存档 ${id} → ${meta.name}（${label}）`)
+    res.json(saveView(meta))
   }))
 
-  app.get('/app/save-backups', (_req, res) => {
-    res.json({ items: store.listBackups().map(b => ({ ...b, ...b.storyId ? { agentPreset: b.storyId } : {} })) })
-  })
-
-  /** 读档：快照拷回原位并成为当前唯一会话。 */
-  app.post('/app/save-backups/:name/restore', asyncRoute(async (req, res) => {
+  app.post('/app/sessions/:id/saves/:name/load', asyncRoute(async (req, res) => {
+    const id = String(req.params.id)
     const name = String(req.params.name)
-    const existing = store.listBackups().find(b => b.name === name)
-    if (!existing) {
+    if (!gameOr404(res, id)) return
+    if (!store.backupsOf(id).some(b => b.name === name)) {
       notFound(res, '存档不存在')
       return
     }
-    if (engine.isRunning(existing.sessionId)) {
-      engine.cancel(existing.sessionId)
-      await engine.idle(existing.sessionId)
+    if (engine.isRunning(id)) {
+      engine.cancel(id)
+      await engine.idle(id)
     }
-    const sessionId = store.restore(name)
-    pruneGames(sessionId)
-    console.log(`[bff] 已读档 ${name} → ${sessionId}`)
-    res.json({ sessionId })
+    store.restore(name)
+    summaries.delete(id)
+    engine.notifyReset(id)
+    console.log(`[bff] 已读档 ${name} → ${id}`)
+    res.json({ sessionId: id })
   }))
 
-  app.delete('/app/save-backups/:name', (req, res) => {
-    store.removeBackup(String(req.params.name))
+  app.delete('/app/sessions/:id/saves/:name', (req, res) => {
+    const id = String(req.params.id)
+    const name = String(req.params.name)
+    if (!store.backupsOf(id).some(b => b.name === name)) {
+      notFound(res, '存档不存在')
+      return
+    }
+    store.removeBackup(name)
     res.json({ ok: true })
   })
 
-  // ---- 删除剧本：源 + 存档 + 修改对话一并移除；有会话正玩着就拒绝 ----
+  // ---- 删除剧本：源 + 修改对话一并移除；还有冒险用着它就拒绝 ----
 
   app.delete('/app/scenarios/:id', (req, res) => {
     const id = String(req.params.id)
@@ -355,19 +421,19 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(400).json({ error: { code: 'seed', message: '这是仓库内置的种子剧本，不能在界面里删除' } })
       return
     }
-    if (listed().some(s => s.kind === 'game' && s.storyId === id)) {
-      res.status(409).json({ error: { code: 'in-use', message: '这个剧本正在游玩中——先在剧本页删除进行中的会话（可先存档）' } })
+    const games = listed().filter(s => s.kind === 'game' && s.storyId === id)
+    if (games.length) {
+      res.status(409).json({ error: { code: 'in-use', message: `这部剧本还有 ${games.length} 局冒险——先在「读取存档」里删掉它们` } })
       return
     }
     rmSync(entry.dir, { recursive: true, force: true })
-    for (const b of store.listBackups()) if (b.storyId === id) store.removeBackup(b.name)
     const map = readEditMap()
     if (map[id]) {
       if (store.exists(map[id])) store.remove(map[id])
       delete map[id]
       writeEditMap(map)
     }
-    console.log(`[bff] 已删除剧本 ${id}（含其存档与修改对话）`)
+    console.log(`[bff] 已删除剧本 ${id}（含其修改对话）`)
     res.json({ ok: true })
   })
 
@@ -477,10 +543,29 @@ export function createApp(deps: AppDeps): express.Express {
     res.json({ accepted: true })
   })
 
-  // 分支存档在单存档模式下关闭（"重写上一回合"内部用截断实现，不算分支）
+  // 分支不开放：存档水晶已经覆盖"留一个点、之后回来"的需要（"重写""回退"内部用截断实现，不算分支）
   app.post('/app/sessions/:id/fork', (_req, res) => {
-    res.status(409).json({ error: { code: 'single-save-mode', message: '当前为单存档模式，分支功能暂未开放' } })
+    res.status(409).json({ error: { code: 'no-fork', message: '不开放分支：用营地的存档水晶留档，再读档回来' } })
   })
+
+  /** 回退到第 toTurn 回合结束时（其后的回合截掉、原稿归档），不重跑，玩家重新选择。 */
+  app.post('/app/sessions/:id/rewind', asyncRoute(async (req, res) => {
+    const id = String(req.params.id)
+    const toTurn = Number((req.body as { toTurn?: unknown } | undefined)?.toTurn)
+    if (!Number.isInteger(toTurn) || toTurn < 0) {
+      res.status(400).json({ error: { code: 'bad-request', message: 'toTurn 必须是非负整数' } })
+      return
+    }
+    await engine.rewind(id, toTurn)
+    res.json({ sessionId: id })
+  }))
+
+  /** 从头重开这一局：回退到第 0 回合，界面随后补发开场。存档水晶不受影响。 */
+  app.post('/app/sessions/:id/restart', asyncRoute(async (req, res) => {
+    const id = String(req.params.id)
+    await engine.rewind(id, 0)
+    res.json({ sessionId: id })
+  }))
 
   /** 重写上一回合：截断日志到上一回合的玩家输入之前（原稿归档），原样重发。会话 id 不变。 */
   app.post('/app/sessions/:id/retry', asyncRoute(async (req, res) => {

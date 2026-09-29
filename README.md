@@ -39,8 +39,8 @@ cd /path/to/taleforge && sudo docker compose up -d --build
 
 | 目录 | 内容 |
 |---|---|
-| `apps/web` | 玩家前端（Vite + React，固定 UI） |
-| `apps/bff` | 平台服务：托管前端、剧本库、会话与存档、回合入口、SSE 推流 |
+| `apps/web` | 玩家前端（Vite + React + Tailwind，界面整体移植自前作 Rpgforge；多局冒险并存，每局可存多个存档） |
+| `apps/bff` | 平台服务：托管前端、剧本库、冒险与存档水晶、回合入口、SSE 推流 |
 | `packages/engine` | 内核：回合流水线、上下文组装、结算步的组装与裁决、前情提要、被动观测 |
 | `packages/llm` | DeepSeek 客户端（fetch + SSE，工具调用分片拼装，推理回传，缓存用量） |
 | `packages/store` | 会话存储：每个会话一个 JSONL 事件日志，状态由日志折叠 |

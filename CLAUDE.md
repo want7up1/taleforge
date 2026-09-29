@@ -52,7 +52,7 @@ F1 契约定稿（story v1、persona 底座收缩 + 工艺模块化、创作说�
 | P1 内核原型 | 完成：`packages/llm`、`packages/engine`、`packages/store`；真实 DeepSeek 冒烟见下方「G1 实测」 |
 | P2 功能对齐 | 完成：全部货架件、幕与结局、场外与修订、加点直接落账、重写（截断）、取消、凭据与模型设置；前端接上 |
 | P3 上下文预算 | 完成：前情提要（后台）、K 章窗口、按幕渲染、机制细则挪到结算步、风格范本字段。G3 需要用户真实玩 30 回合以上对照基线 |
-| P4 外围功能 | 完成：剧本库、存档读档、工坊与修改对话、发布防护与回滚、导入导出、说明书——路由与前端逐项对齐（35 条 /app/*） |
+| P4 外围功能 | 完成：剧本库、存档读档、工坊与修改对话、发布防护与回滚、导入导出、说明书。之后（同日）前端整体换成 Rpgforge 的界面、改为多存档，见「多存档」「前端」 |
 | P5 部署切换 | 完成（2026-09-29，用户要求不留备份）：单进程镜像，数据卷路径不变；启动时从旧 `.credentials.yaml` 与 `settings.yaml` 导入了 Key 与默认模型；线上冒烟一个开场回合（结算成功、4 个选项）后删掉测试会话。部署前线上已经没有 taleforge 容器在跑。线上通关一局留给用户 |
 | P6 内容层 | 完成平台侧：`cast[].voice`、`opening.chapter`、`craft.exemplar`、`lore[]` 全部可用、进说明书与工坊；用一部剧本用上新字段真实通关需要用户 |
 
@@ -85,7 +85,7 @@ F1 契约定稿（story v1、persona 底座收缩 + 工艺模块化、创作说�
   - `packages/engine`：回合流水线（`engine.ts`）、会话折叠（`fold.ts`，**唯一的一份重放实现**）、上下文组装（`prompts.ts`）、结算步（`settle.ts`）、另两件工具（`tools.ts`）、被动观测（`observer.ts`）、漂移回灌（`drift.ts`）。`testkit.ts` 是按请求形状分派的假模型，测试与本地 E2E 用，不进生产导出。
   - `packages/store`：每个会话一个 JSONL 事件日志。追加用 O_APPEND、读时容忍残缺尾行；重写（截断/读档）先写临时文件再 rename。事件与流式增量共用一条单调 seq（增量不落盘，序号照样占用）。
 - **复用的纯逻辑**：mechanics（resources/check/inventory/progression/types）、progress（progress/types + 修订校验）、scenario-compiler（schema/persona/merge/catalog）、workshop（发布/留档/回滚/写法体检）、前端 fold。dsh 插件外壳全部删掉。
-- **对前端保持契约**：35 条 `/app/*` 路由不变；SSE 帧是 `event`（持久事件，信封 `{type, seq, time, data}`）/ `delta`（正文增量）/ `phase`（阶段）/ `state`（面板视图快照）/ `reset`（日志被截断，重拉）。视图字段名沿用旧投影（mechanics/attributes/inventory/progress/progression/sessionStats），面板组件没改。
+- **前端契约**：路由都在 `/app/*` 下（2026-09-29 改多存档时新增 games、saves、rewind、restart、sessions/:id/story，去掉旧的 save-backups）；SSE 帧是 `event`（持久事件，信封 `{type, seq, time, data}`）/ `delta`（正文增量）/ `phase`（阶段）/ `state`（面板视图快照）/ `reset`（日志被截断，重拉）。视图字段名沿用旧投影（mechanics/attributes/inventory/progress/progression/sessionStats），面板组件没改。
 - **删掉的**：dsh 全家、tool-mask、`apps/bff/src/dsh.ts`、双进程入口脚本与 `runtime/patch.web.yml`，以及流程改由代码强制后不再需要的提示词：【回合流程】注入块、report_progress 的调用时机文案、行动块尾行提醒。
 
 回合流水线：
@@ -128,7 +128,7 @@ K、N 缺省 5、4（`v2/settings.json` 的 recentChapters / recapEvery 可调�
 **数据根**（沿用旧路径，数据卷不用改；容器里 `/app/runtime/dsh-home`，本地 `runtime/dsh-home`，环境变量 `TALEFORGE_HOME`，兼容旧的 `DSH_HOME`）：
 
 - `scenarios/`：剧本源（含 `versions/` 留档），原样沿用。
-- `v2/sessions/*.jsonl` 会话日志、`v2/archive/` 被顶掉的旧局与重写前的原稿（只归档不删，是对照语料）、`v2/backups/` 玩家存档、`v2/settings.json` 模型与窗口设置、`v2/credentials.json` API Key（0600）、`v2/edit-sessions.json` 修改对话映射。
+- `v2/sessions/*.jsonl` 会话日志、`v2/archive/` 删掉的局、重写/回退前的原稿（只归档不删，是对照语料）、`v2/backups/` 存档水晶（按局，带名称备注）、`v2/settings.json` 模型与窗口设置、`v2/credentials.json` API Key（0600）、`v2/edit-sessions.json` 修改对话映射。
 - `observer-v2.jsonl`：v2 的被动观测；旧的 `observer.jsonl` 原样保留作对照基线。
 - `sessions/`、`save-backups/`、`.agent-presets/`、`edit-sessions.json`、`settings.yaml`、`.credentials.yaml` 等：dsh 时代的遗留，只读保留、新内核不读（旧存档不迁，用户已批准）。首次启动时 `.credentials.yaml` 的 Key 与 `settings.yaml` 的默认模型各导入一次（退役的 `deepseek-v4-flash` 换成 `deepseek-flash`）。
 
@@ -195,15 +195,29 @@ K、N 缺省 5、4（`v2/settings.json` 的 recentChapters / recapEvery 可调�
 
 玩家回合里的多 agent、作者面板和观测面板、评测设施、结构化战斗、多模型、多用户和认证、公网暴露、可视化编辑器。
 
-## 单存档（当前阶段的产品约束）
+## 多存档（2026-09-29 用户改定，取代单存档）
 
-平台同时只暴露一个进行中的游戏会话：`/app/sessions` 只列最近一个。开新局或读档时，其余游戏会话**归档**进 `v2/archive/`（只挪不删——被顶掉的整局正文是唯一能拿来对照"改动前后写得怎样"的语料）。工坊会话与各剧本的修改对话不受影响。分支功能关闭——接口返回 `single-save-mode`；"重写上一回合"是截断日志（原稿先归档），不算分支。
+多局冒险并存，照搬前作 Rpgforge 的存档模型：
+- **冒险**（游戏会话）：`/app/games` 列出全部，最近玩过的在前；开新局不影响其他局。删除一局 = 日志挪进 `v2/archive/`（只归档不删——整局正文是对照"改动前后写得怎样"的语料），它的存档水晶一并删除。
+- **存档水晶**：某一局在某个时刻的整份日志（`v2/backups/`，带玩家起的名称与备注）。读档 = 这一局**原地**恢复到那一刻（同一个会话 id，在线界面收到 reset 帧重拉）；其他存档不受影响。生成中不许存档（会存下半个回合）。
+- **撤销 / 回到第 N 回合**（`/rewind`）：其后的回合截掉（原稿归档），不重跑，玩家回到第 N 回合的正文与抉择重新选。**从头重开**（`/restart`）= 回到第 0 回合，存档水晶保留。**重写上一回合**（`/retry`）= 截断后原样重发同一输入。三者都不算分支；分支接口仍然关闭（`/fork` 返回 409）。
+- 删剧本：还有冒险用着它就 409（先删冒险）；删 = 源目录 + 它的修改对话；仓库种子剧本不能在界面删。
+- 界面拿人物、世界等剧本信息一律用 `/app/sessions/:id/story`——这局开局时锁定的快照，不跟着剧本源变。
 
-词汇与界面归属（2026-08-20 用户定稿，2026-08-28 主页改版）：进行中的游戏叫**会话**，快照叫**存档**（存档 = 日志复制进 `v2/backups/`，读档 = 拷回原位成为唯一会话）。主页是**标题画面**（借 Rpgforge 形态：无顶栏，像素 logo + 竖排主菜单 继续冒险/剧本库/工坊/设置 + 平台状态灯，上下键可选），剧本卡在「剧本库」页；**不做全局存档页**——会话与存档的全部管理都在剧本详情页、按剧本过滤显示，详情页同时是游玩页顶栏「营地」的直达目标。确认框统一走 `PixelDialog`，不用原生 confirm；删剧本这类级联且不可恢复的操作要求原样输入标题才能确认。删剧本 = 删源目录 + **级联删除它的存档与修改对话**；有会话正玩着时 409 拒绝；仓库种子剧本不能在界面删。
+词汇与界面归属（2026-09-29 随前端移植改定）：标题画面主菜单是 继续冒险 / 新的冒险 / 读取存档 / 剧本库 / 系统设置；**新的冒险**是"创造炉"（三扇门：从剧本库开局、AI 访谈写剧本、导入剧本）；**读取存档**是全部冒险的列表；每局的菜单是 剧情 / 状态 / 角色 / 旅程 / 记忆 / 设定 / 营地 / 离开，存档水晶在**营地**。确认框统一走 `PixelDialog`，不用原生 confirm；删除这类不可恢复的操作要求原样输入标题才能确认。
 
-修改剧本的唯一入口是**详情页唤起 GM**（"去工坊改"方案被用户否决）：每个剧本各自常驻一个修改对话（与工坊同一个 persona 与工具，同一聊天组件换标题与开场白），映射存 `v2/edit-sessions.json`。
+修改剧本的唯一入口仍是**唤起 GM**（"去工坊改"被用户否决；表单式设定看板属于可视化编辑器，护栏 4 不做）：剧本详情页与每局的「设定」页都有入口，每个剧本各自常驻一个修改对话（与工坊同一个 persona 与工具），映射存 `v2/edit-sessions.json`。
 
 **在服务器上验证功能时复用同一个测试会话，或验证完立刻清理。** 曾经一次改提示词验证一轮，累积 12 个存档全留在用户的列表里，用户无从分辨哪个是哪个。
+
+## 前端（2026-09-29 整体移植自 Rpgforge）
+
+用户要求"把 Rpgforge 精心打磨的前端全拿过来"。Rpgforge 前端是 Next.js 16 + Tailwind 4、每页绑着它自己的 FastAPI 数据，不能原样拷贝；做法是**外观、布局、组件照搬，数据接 TaleForge 的内核**：
+- 技术：仍是 Vite + React 单页（不换 Next.js，换了就要多一个服务进程）；接入 Tailwind 4（`@tailwindcss/vite`）；`src/styles.css` 主体是 Rpgforge 的 `globals.css` 原样，文末追加 TaleForge 独有组件（数值条、等级条、骰子卡、场外浮窗、加点）；像素字体仍自托管。
+- 结构：`src/pages/*`（每个页面一个文件）、`src/components/*`（外壳、游戏菜单、询问框、正文渲染、角色卡、对话视图）、`src/useGameSession.ts`（游玩页的事件流、断线重拉、断点续传——逻辑原样搬自旧游玩屏，只换了外观）。纯函数单独放 `.ts`（`paths.ts`、`cast.ts`、`components/markdown.ts`）才能被 node 测试加载。
+- 游玩页保留了 TaleForge 独有的：数值条、骰子卡、升级与加点（在手账里加）、场外 GM 浮窗、重写。新增 Rpgforge 的：撤销、目标横幅（幕目标 + 本幕进度）、在场角色条、抉择卡、结局卡、新手引导、手账抽屉。
+- **按用户决定没搬的**（2026-09-29）：观测类面板（每回合 token/缓存、思考过程、生成阶段详情、AI 链路监控与 Judge 评分——护栏 4/6）；表单式设定看板与创造炉里的生成看板（改剧本走唤起 GM）；炼金工坊（设定模块合并，TaleForge 没有对应后端）；角色立绘上传（先用像素首字占位框）；状态页的"地点/在场 NPC 登记/任务/线索/文字关系"（Rpgforge 靠事后 LLM 提取，TaleForge 不记这些，换成自己的面板数据）。
+- 验证：`scratchpad` 里的 Playwright 脚本走一遍全部页面（标题 → 创造炉开局 → 引导 → 抉择 → 手账 → 场外 → 六个子页 → 营地存档 → 撤销 → 读档 → 第二局 → 存档列表 → 深链刷新），页面零报错。
 
 ## 硬护栏（Rpgforge 教训，违反即返工）
 
@@ -319,7 +333,8 @@ agent 只知道"这里不行"而不知道正确出路时，会向玩家把工具
 - 本地不花额度的全链路验证：用 `DEEPSEEK_BASE_URL` 指向一个模拟服务（按官方约束校验请求），`TALEFORGE_HOME` 指向临时目录，真 BFF 进程照常跑。
 - **回合首字延迟**：正文步开思考，推理阶段（flash 每回合先想，长的 30 秒+）发生在正文首字之前；v2 起首字前的工具往返只有掷骰那一次。结算步关思考、只出一个工具调用，实测 1–2 秒，发生在正文写完之后（玩家在读）。前端把阶段可见化（构思中/掷骰判定/结算中）。
 - **前端事件流靠"重连即重拉"自愈**（apps/web/src/stream.ts + fold.ts planResume）：切后台/锁屏/网络切换会让 SSE 在服务端已断而客户端仍显示 OPEN，漏掉的 turn/end 永远不会再来。对策是回前台/pageshow/online 一律重建连接，每次连接建立后重拉 history 按 seq 对齐本地状态；心跳是具名 `event: ping`（SSE 注释到不了页面脚本），前端 60s 没帧就重连——别把心跳改回注释。
-- **hash 路由的刷新恢复必须用模块加载时捕获的初始 hash**：hash 同步 effect 先于恢复 effect 执行，挂载瞬间就把 `#/play` 改写成 `#/library`；恢复完成前同步 effect 保持沉默。
+- **路径路由靠服务端回退 index.html**：界面用 `/games/:id/play` 这类地址（History API，自写的 `router.tsx`），平台服务对非 `/app` 路径一律回 `index.html`，所以任何页面都能直接刷新、直接分享。旧版的 `#/…` 地址进来一律回标题画面。
+- **Tailwind 的 `hidden` 盖不住 `.px-btn`**：Tailwind 4 的工具类在 `@layer utilities` 里，样式表里未分层的 `.px-btn { display: inline-flex }` 优先级更高。要按屏宽隐藏一个 `.px-btn`，把 `hidden sm:inline-flex` 套在外层 span 上（游玩页的模型按钮就是这么做的）。
 
 ## 剧本发布防护（GM 改剧本不能改坏）
 

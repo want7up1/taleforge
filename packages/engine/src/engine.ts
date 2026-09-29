@@ -335,6 +335,42 @@ export class Engine {
     this.start(sessionId, 'play', signal => this.runPlay(sessionId, input, signal))
   }
 
+  /**
+   * 回退到第 toTurn 回合结束时（Rpgforge 的"后悔药"）：其后的回合整段截掉（原稿先归档），
+   * 不重跑——玩家看到第 toTurn 回合的正文与选项，重新选择。toTurn = 0 即从头重开，
+   * 界面会像新开局一样补发开场。第 toTurn 回合之后的场外往来与修订一并回退。
+   */
+  async rewind(sessionId: string, toTurn: number): Promise<void> {
+    const run = this.running.get(sessionId)
+    if (run) {
+      run.controller.abort()
+      await run.done
+    }
+    await this.recaps.get(sessionId)
+    const events = this.deps.store.read(sessionId)
+    if (foldSession(events).created.kind !== 'game') throw new EngineError('no-turn', '只有游戏会话能回退')
+    let lastInput: number | undefined
+    let cut: number | undefined
+    for (const e of events) {
+      if (e.type === 'player/input') lastInput = e.seq
+      if (e.type === 'turn/start') {
+        const data = e.data as unknown as TurnStartData
+        if (data.kind === 'play' && data.turn > toTurn) {
+          cut = lastInput
+          break
+        }
+      }
+    }
+    if (cut === undefined) throw new EngineError('no-turn', `第 ${toTurn} 回合之后没有可回退的内容`)
+    this.deps.store.truncate(sessionId, cut)
+    this.emit(sessionId, { type: 'reset' })
+  }
+
+  /** 日志被外部整份替换（读档）后通知在线的界面重拉。 */
+  notifyReset(sessionId: string): void {
+    this.emit(sessionId, { type: 'reset' })
+  }
+
   private start(sessionId: string, kind: TurnStartData['kind'], body: (signal: AbortSignal) => Promise<void>): void {
     const controller = new AbortController()
     const run: Running = {

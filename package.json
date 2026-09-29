@@ -12,7 +12,7 @@
     "dev": "concurrently -n bff,web -c green,yellow \"pnpm run dev:bff\" \"pnpm run dev:web\"",
     "build": "pnpm --filter @taleforge/web build",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "node --test apps/web/src/*.test.ts apps/bff/src/*.test.ts packages/*/src/*.test.ts"
+    "test": "node --test apps/web/src/*.test.ts apps/web/src/components/*.test.ts apps/bff/src/*.test.ts packages/*/src/*.test.ts"
   },
   "devDependencies": {
     "concurrently": "^9.2.0"

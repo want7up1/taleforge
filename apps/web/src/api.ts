@@ -1,6 +1,8 @@
 import type {
   CredentialStatus,
+  GameItem,
   HistoryEntry,
+  SaveItem,
   ModelCatalog,
   ModelSelection,
   ProjectionsBlock,
@@ -116,7 +118,7 @@ export const api = {
   retry: (sessionId: string) =>
     json<{ sessionId: string }>(fetch(`/app/sessions/${sessionId}/retry`, { method: 'POST' })),
 
-  /** 取（或创建）常驻工坊会话 */
+  /** 取（或创建）常驻工坊会话（AI 访谈写剧本） */
   workshop: () => json<{ sessionId: string }>(fetch('/app/workshop', { method: 'POST' })),
 
   /** 重开工坊，丢弃访谈进度 */
@@ -152,25 +154,47 @@ export const api = {
       fetch(`/app/scenarios/${id}/versions/${name}/restore`, { method: 'POST' }),
     ),
 
-  /** 删除进行中的会话 */
+  /** 全部冒险，最近玩过的在前 */
+  games: () => json<{ items: GameItem[] }>(fetch('/app/games')),
+
+  /** 这局冒险开局时锁定的剧本（玩家可见部分） */
+  sessionStory: (sessionId: string) => json<StoryDetail>(fetch(`/app/sessions/${sessionId}/story`)),
+
+  /** 删除一局冒险（日志归档，存档水晶一并删除） */
   deleteSession: (sessionId: string) =>
     json<{ ok: true }>(fetch(`/app/sessions/${sessionId}`, { method: 'DELETE' })),
 
-  /** 存档：会话快照进服务器数据卷 */
-  saveSnapshot: (sessionId: string) =>
-    json<{ name: string }>(fetch(`/app/sessions/${sessionId}/backup`, { method: 'POST' })),
+  saves: (sessionId: string) => json<{ items: SaveItem[] }>(fetch(`/app/sessions/${sessionId}/saves`)),
 
-  listSaves: () =>
-    json<{ items: { name: string; sessionId: string; backedAt: number; title?: string; agentPreset?: string; turns?: number }[] }>(
-      fetch('/app/save-backups'),
+  createSave: (sessionId: string, label: string, note: string) =>
+    json<SaveItem>(
+      fetch(`/app/sessions/${sessionId}/saves`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label, note }),
+      }),
     ),
 
-  /** 读档：快照成为当前唯一会话 */
-  loadSave: (name: string) =>
-    json<{ sessionId: string }>(fetch(`/app/save-backups/${name}/restore`, { method: 'POST' })),
+  /** 读档：这一局原地恢复到存档那一刻 */
+  loadSave: (sessionId: string, name: string) =>
+    json<{ sessionId: string }>(fetch(`/app/sessions/${sessionId}/saves/${name}/load`, { method: 'POST' })),
 
-  deleteSave: (name: string) =>
-    json<{ ok: true }>(fetch(`/app/save-backups/${name}`, { method: 'DELETE' })),
+  deleteSave: (sessionId: string, name: string) =>
+    json<{ ok: true }>(fetch(`/app/sessions/${sessionId}/saves/${name}`, { method: 'DELETE' })),
+
+  /** 回退到第 toTurn 回合结束时（其后的回合截掉），不重跑 */
+  rewind: (sessionId: string, toTurn: number) =>
+    json<{ sessionId: string }>(
+      fetch(`/app/sessions/${sessionId}/rewind`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ toTurn }),
+      }),
+    ),
+
+  /** 从头重开这一局（存档水晶不受影响） */
+  restart: (sessionId: string) =>
+    json<{ sessionId: string }>(fetch(`/app/sessions/${sessionId}/restart`, { method: 'POST' })),
 
   /** 导入剧本：校验失败返回逐条错误（400 也要解析正文，不走通用 json 助手） */
   importStory: async (story: unknown) => {

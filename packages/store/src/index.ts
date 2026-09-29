@@ -6,9 +6,9 @@
  * - fork = 截断后复制；存档 = 复制文件；读档 = 拷回来。
  *
  * 目录（都在数据卷里）：
- *   sessions/<id>.jsonl    进行中的会话（游戏、工坊、修改对话）
- *   archive/<id>__<时间>.jsonl  被单存档顶掉的旧局、重写前的原稿——只归档不删，是对照语料
- *   backups/<时间>__<id>.jsonl + .meta.json  玩家手动存档
+ *   sessions/<id>.jsonl    进行中的会话（游戏、工坊、修改对话），多局并存
+ *   archive/<id>__<时间>.jsonl  玩家删掉的局、重写/回退前的原稿——只归档不删，是对照语料
+ *   backups/<时间>__<id>.jsonl + .meta.json  存档水晶：某一局在某个时刻的整份日志
  */
 import { randomBytes } from 'node:crypto'
 import {
@@ -44,12 +44,17 @@ export interface SessionListing {
 }
 
 export interface BackupMeta {
+  /** 存档文件名（时间戳__会话 id），也是读档/删档用的键 */
   name: string
   sessionId: string
   backedAt: number
   title?: string
   storyId?: string
   turns?: number
+  /** 玩家起的存档名（存档水晶的标题） */
+  label?: string
+  /** 玩家写的备注 */
+  note?: string
 }
 
 const SESSION_ID = /^s-[0-9]{14}-[a-z0-9]{6}$/
@@ -203,7 +208,7 @@ export class SessionStore {
   }
 
   /**
-   * 截断：只保留 seq < beforeSeq 的事件（重写上一回合用）。原稿先整份复制进 archive/，
+   * 截断：只保留 seq < beforeSeq 的事件（重写、回退、从头重开都走它）。原稿先整份复制进 archive/，
    * 被弃掉的那一章不会凭空消失。seq 水位不回退——已经发给界面的序号不能再发一次。
    */
   truncate(id: string, beforeSeq: number): StoredEvent[] {
@@ -254,5 +259,10 @@ export class SessionStore {
     if (!BACKUP_NAME.test(name)) return
     rmSync(path.join(this.backupsDir, `${name}.jsonl`), { force: true })
     rmSync(path.join(this.backupsDir, `${name}.meta.json`), { force: true })
+  }
+
+  /** 某一局的全部存档。 */
+  backupsOf(sessionId: string): BackupMeta[] {
+    return this.listBackups().filter(b => b.sessionId === sessionId)
   }
 }

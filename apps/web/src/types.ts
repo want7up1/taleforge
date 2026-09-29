@@ -13,6 +13,29 @@ export interface SessionSummary {
   }
 }
 
+/** 一局冒险（读取存档列表的一行） */
+export interface GameItem {
+  sessionId: string
+  title: string
+  storyId?: string
+  updatedAt: number
+  running: boolean
+  /** 已写成的回合数 */
+  turns: number
+  phase: 'playing' | 'finale' | 'ended'
+  actTitle?: string
+  tagline?: string
+}
+
+/** 一枚存档水晶 */
+export interface SaveItem {
+  name: string
+  label: string
+  note?: string
+  backedAt: number
+  turns: number
+}
+
 export interface ScenarioSummary {
   id: string
   name: string
@@ -34,7 +57,7 @@ export interface StoryDetail {
   world: { overview: string; tone: string[] }
   protagonist: { name: string; identity: string; voice?: string }
   cast: { id: string; name: string; identity: string }[]
-  opening: { scene: string; hook: string }
+  opening: { scene: string; hook: string; chapter?: string }
   acts: StoryAct[]
   craft?: { modules: string[]; rating?: string; rules?: string[] }
   mechanics?: {

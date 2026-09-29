@@ -1,73 +1,42 @@
+/**
+ * 路由表与全站状态（平台健康、API Key、前端构建过期提示）。页面布局整体移植自 Rpgforge。
+ */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
-import { Brand } from './Brand.tsx'
-import { History } from './History.tsx'
-import { Library } from './Library.tsx'
-import { Play } from './Play.tsx'
-import { ScenarioDetail } from './ScenarioDetail.tsx'
-import { Settings } from './Settings.tsx'
-import { Title, type PlatformHealth } from './Title.tsx'
-import { Workshop } from './Workshop.tsx'
-import type { CredentialStatus, ScenarioSummary, SessionSummary, StoryDetail } from './types.ts'
+import { CampPage } from './pages/CampPage.tsx'
+import { CharactersPage } from './pages/CharactersPage.tsx'
+import { EditPage } from './pages/EditPage.tsx'
+import { GamesPage } from './pages/GamesPage.tsx'
+import { HistoryPage } from './pages/HistoryPage.tsx'
+import { LibraryPage } from './pages/LibraryPage.tsx'
+import { MemoryPage } from './pages/MemoryPage.tsx'
+import { NewGamePage } from './pages/NewGamePage.tsx'
+import { PlayPage } from './pages/PlayPage.tsx'
+import { ScenarioPage } from './pages/ScenarioPage.tsx'
+import { ScriptPage } from './pages/ScriptPage.tsx'
+import { SettingsPage } from './pages/SettingsPage.tsx'
+import { StatusPage } from './pages/StatusPage.tsx'
+import { TitlePage, type PlatformHealth } from './pages/TitlePage.tsx'
+import { matchPath, navigate, usePath } from './router.tsx'
+import type { CredentialStatus } from './types.ts'
 
-type View = 'home' | 'library' | 'settings' | 'play' | 'history' | 'workshop' | 'scenario' | 'edit'
-
-/**
- * 挂载前捕获的初始 hash。刷新恢复必须用它而不是现读 location.hash：下面的 hash 同步
- * effect 先于恢复 effect 执行，首轮就会把 #/play 改写成 #/library，现读只能读到改写后
- * 的值（实测如此——刷新因此永远退回剧本库）。
- */
-const initialHash = location.hash
-/** 要先拉数据才能进的界面：恢复完成前不许 hash 同步 effect 改写地址 */
-const needsAsyncRestore = (hash: string) =>
-  hash === '#/play' || hash === '#/history' || hash === '#/workshop'
-  || hash.startsWith('#/scenario/') || hash.startsWith('#/edit/')
+// 旧版是 hash 路由（#/play、#/library……）：书签和旧标签页进来一律回标题画面
+if (location.hash.startsWith('#/')) history.replaceState(null, '', '/')
 
 export function App() {
-  const [view, setView] = useState<View>(
-    initialHash === '#/settings' ? 'settings' : initialHash === '#/library' ? 'library' : 'home',
-  )
-  const restoring = useRef(needsAsyncRestore(initialHash))
-  const [scenarios, setScenarios] = useState<ScenarioSummary[]>([])
-  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const path = usePath()
   const [credential, setCredential] = useState<CredentialStatus>()
-  const [active, setActive] = useState<string>()
-  const [workshopId, setWorkshopId] = useState<string>()
-  const [story, setStory] = useState<StoryDetail>()
-  /** 详情页正在查看的剧本 */
-  const [detail, setDetail] = useState<StoryDetail>()
-  /** 详情页唤起的修改对话（按剧本记账，防止串到别的剧本） */
-  const [edit, setEdit] = useState<{ scenarioId: string; sessionId: string }>()
-  const [error, setError] = useState<string>()
-  /** 服务端换了前端构建：页面开着不动就一直跑旧 JS，得提示玩家刷新 */
-  const [stale, setStale] = useState(false)
-  /** 标题画面的状态灯：平台服务是否就绪 */
   const [health, setHealth] = useState<PlatformHealth>('checking')
+  /** 服务端换了前端构建：页面开着不动就一直跑旧 JS，得提示刷新（只提示，不自动刷——正文读到一半被刷掉更糟） */
+  const [stale, setStale] = useState(false)
   const baseBuild = useRef<string | undefined>(undefined)
 
-  const refresh = useCallback(async () => {
-    try {
-      const [{ items: sessionItems }, { items: scenarioItems }, cred] = await Promise.all([
-        api.listSessions(),
-        api.listScenarios(),
-        api.credentialStatus(),
-      ])
-      setSessions(sessionItems.filter(s => !s.blank))
-      setScenarios(scenarioItems)
-      setCredential(cred)
-    } catch (err) {
-      setError(String(err))
-    }
+  const refreshCredential = useCallback(() => {
+    api.credentialStatus().then(setCredential).catch(() => undefined)
   }, [])
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
-
-  // 部署新版后，开着不动的页面仍跑加载时那份 JS。踩过一次：投影 key 改成按剧本分片后，
-  // 旧 bundle 用全等匹配认不出新 key，结算卡片整列显示资源 id，而服务端一切正常，极难排查。
-  // 这里只提示、不自动刷新——正文读到一半被刷掉更糟。
-  useEffect(() => {
+    refreshCredential()
     const check = async () => {
       if (document.hidden) return
       try {
@@ -77,7 +46,6 @@ export function App() {
         if (baseBuild.current === undefined) baseBuild.current = build
         else if (build !== baseBuild.current) setStale(true)
       } catch {
-        // 探测失败不弹提示，只让标题画面的状态灯变色
         setHealth('offline')
       }
     }
@@ -88,305 +56,46 @@ export function App() {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', check)
     }
-  }, [])
+  }, [refreshCredential])
 
-  // ---- hash 路由：每个界面一条浏览器历史，前进/后退可用 ----
-
-  useEffect(() => {
-    if (restoring.current) return
-    const target
-      = view === 'scenario' && detail ? `#/scenario/${detail.id}`
-        : view === 'edit' && detail ? `#/edit/${detail.id}`
-          : `#/${view}`
-    if (location.hash !== target) location.hash = target
-  }, [view, detail])
-
-  /** 进入某剧本的修改对话：详情与会话就绪后切视图 */
-  const openEdit = useCallback(async (scenarioStory: StoryDetail) => {
-    setError(undefined)
-    const { sessionId } = await api.editSession(scenarioStory.id)
-    setEdit({ scenarioId: scenarioStory.id, sessionId })
-    setView('edit')
-  }, [])
-
-  useEffect(() => {
-    const onHash = () => {
-      if (location.hash.startsWith('#/scenario/')) {
-        const id = location.hash.slice('#/scenario/'.length)
-        if (detail?.id === id) return setView('scenario')
-        api.scenario(id).then((s) => {
-          setDetail(s)
-          setView('scenario')
-        }).catch(() => setView('library'))
-        return
-      }
-      if (location.hash.startsWith('#/edit/')) {
-        const id = location.hash.slice('#/edit/'.length)
-        if (detail?.id === id && edit?.scenarioId === id) return setView('edit')
-        void Promise.all([api.scenario(id), api.editSession(id)])
-          .then(([s, es]) => {
-            setDetail(s)
-            setEdit({ scenarioId: id, sessionId: es.sessionId })
-            setView('edit')
-          })
-          .catch(() => setView('library'))
-        return
-      }
-      const v = location.hash.replace(/^#\//, '') as View
-      if (!['home', 'library', 'settings', 'play', 'history', 'workshop'].includes(v)) return setView('home')
-      // 需要前置状态的界面缺状态时回退标题画面
-      if ((v === 'play' || v === 'history') && !active) return setView('home')
-      if (v === 'workshop' && !workshopId) return setView('home')
-      setView(v)
-    }
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [active, workshopId, detail, edit])
-
-  // 刷新/深链恢复：带着 #/play、#/history、#/workshop、#/scenario/<id>、#/edit/<id> 打开时，
-  // 先拉齐前置状态再进对应界面（#/settings、#/library 在初始 state 里直接进）。
-  // 恢复结束前 hash 同步 effect 保持沉默，否则恢复目标在挂载瞬间就被改写掉。
-  useEffect(() => {
-    if (!restoring.current) return
-    const done = (restored: boolean) => {
-      restoring.current = false
-      // 恢复不成（会话/剧本已不在）：地址静默改回标题画面，不多留一条浏览历史
-      if (!restored) history.replaceState(null, '', '#/home')
-    }
-    if (initialHash === '#/play' || initialHash === '#/history') {
-      api.listSessions().then(async ({ items }) => {
-        const live = items.filter(s => !s.blank)[0]
-        if (!live) return done(false)
-        await enterSession(live.sessionId, live.agentPreset)
-        if (initialHash === '#/history') setView('history')
-        done(true)
-      }).catch(() => done(false))
-    } else if (initialHash === '#/workshop') {
-      void enterWorkshop().then(done)
-    } else if (initialHash.startsWith('#/scenario/')) {
-      const id = initialHash.slice('#/scenario/'.length)
-      api.scenario(id).then((s) => {
-        setDetail(s)
-        setView('scenario')
-        done(true)
-      }).catch(() => done(false))
-    } else if (initialHash.startsWith('#/edit/')) {
-      const id = initialHash.slice('#/edit/'.length)
-      api.scenario(id).then(async (s) => {
-        setDetail(s)
-        await openEdit(s)
-        done(true)
-      }).catch(() => done(false))
-    } else {
-      done(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const openScenario = async (id: string) => {
-    try {
-      setError(undefined)
-      setDetail(await api.scenario(id))
-      setView('scenario')
-    } catch (err) {
-      setError(String(err))
-    }
-  }
-
-  const enterSession = useCallback(async (sessionId: string, presetId?: string) => {
-    setActive(sessionId)
-    setView('play')
-    if (presetId) {
-      api.scenario(presetId).then(setStory).catch(() => setStory(undefined))
-    }
-  }, [])
-
-  const startScenario = async (scenarioId: string) => {
-    try {
-      setError(undefined)
-      // 开场消息由 Play 在事件流连上后补发，这里只负责建档进屏
-      const { sessionId } = await api.createSession(scenarioId)
-      await enterSession(sessionId, scenarioId)
-      void refresh()
-    } catch (err) {
-      setError(String(err))
-      setView('library')
-    }
-  }
-
-  const resumeSession = async (session: SessionSummary) => {
-    await enterSession(session.sessionId, session.agentPreset)
-  }
-
-  const enterWorkshop = async (): Promise<boolean> => {
-    try {
-      setError(undefined)
-      const { sessionId } = await api.workshop()
-      setWorkshopId(sessionId)
-      setView('workshop')
-      return true
-    } catch (err) {
-      setError(String(err))
-      return false
-    }
-  }
-
-  const renderView = () => {
-  if (view === 'play' && active) {
-    return (
-      <Play
-        sessionId={active}
-        story={story}
-        onExit={() => {
-          setView('home')
-          void refresh()
-        }}
-        onOpenHistory={() => setView('history')}
-        onOpenCamp={() => {
-          // 营地 = 本剧本的详情页：存档/读档/修改剧本都在那里，不必绕回主页
-          if (!story) return
-          setDetail(story)
-          setView('scenario')
-        }}
-        onSessionReplaced={(next) => {
-          setActive(next)
-          void refresh()
-        }}
-      />
-    )
-  }
-
-  if (view === 'history' && active) {
-    return (
-      <History
-        sessionId={active}
-        story={story}
-        onBack={() => setView('play')}
-      />
-    )
-  }
-
-  if (view === 'workshop' && workshopId) {
-    return (
-      <Workshop
-        sessionId={workshopId}
-        onExit={() => {
-          setView('home')
-          void refresh()
-        }}
-        onReset={() => {
-          void api.workshopReset().then(({ sessionId }) => setWorkshopId(sessionId)).catch(err => setError(String(err)))
-        }}
-      />
-    )
-  }
-
-  if (view === 'edit' && detail && edit?.scenarioId === detail.id) {
-    return (
-      <Workshop
-        sessionId={edit.sessionId}
-        title={`修改 · ${detail.title}`}
-        opening={`我要修改剧本《${detail.title}》（id：${detail.id}）。请先用工具读取它的现行正式版，简要确认核心设定，然后等我说要改哪里；发布前把变更点列给我确认。`}
-        showKit={false}
-        exitLabel="返回剧本"
-        resetConfirm="重开会丢弃这段修改对话（已发布的修改不受影响），确定吗？"
-        onExit={() => {
-          // 修改可能已发布：回详情页前重新拉一次现行正式版
-          void api.scenario(detail.id).then(setDetail).catch(() => undefined)
-          setView('scenario')
-          void refresh()
-        }}
-        onReset={() => {
-          void api.editSessionReset(detail.id)
-            .then(({ sessionId }) => setEdit({ scenarioId: detail.id, sessionId }))
-            .catch(err => setError(String(err)))
-        }}
-      />
-    )
-  }
-
-  if (view === 'scenario' && detail) {
-    return (
-      <ScenarioDetail
-        story={detail}
-        current={sessions[0]}
-        blocked={credential && !credential.configured}
-        onStart={() => void startScenario(detail.id)}
-        onResume={s => void resumeSession(s)}
-        onLoaded={(sessionId) => {
-          void enterSession(sessionId, detail.id)
-          void refresh()
-        }}
-        onEdit={() => void openEdit(detail).catch(err => setError(String(err)))}
-        onDeleted={() => {
-          setDetail(undefined)
-          setEdit(undefined)
-          setView('library')
-          void refresh()
-        }}
-        onRefresh={() => void refresh()}
-        onBack={() => setView('library')}
-      />
-    )
-  }
-
-  if (view === 'settings') {
-    return (
-      <div className="screen">
-        <header className="topbar">
-          <Brand />
-          <div className="crumbs"><b>设置</b></div>
-          <div className="tools">
-            <button onClick={() => setView('home')}>← 主菜单</button>
-          </div>
-        </header>
-        <div className="scroll">
-          <div className="column">
-            <Settings status={credential} onSaved={() => void refresh()} />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (view === 'library') {
-    return (
-      <Library
-        scenarios={scenarios}
-        credential={credential}
-        error={error}
-        onOpenScenario={id => void openScenario(id)}
-        onSettings={() => setView('settings')}
-        onWorkshop={() => void enterWorkshop()}
-        onBack={() => setView('home')}
-      />
-    )
-  }
-
-  return (
-    <Title
-      current={sessions[0]}
-      scenarios={scenarios}
-      credential={credential}
-      health={health}
-      error={error}
-      onResume={s => void resumeSession(s)}
-      onLibrary={() => setView('library')}
-      onSettings={() => setView('settings')}
-      onWorkshop={() => void enterWorkshop()}
-    />
-  )
-  }
+  const page = route(path, credential, health, refreshCredential)
 
   return (
     <>
       {stale && (
         <div className="update-bar">
           平台已更新，当前页面还在用旧版本——刷新后才会用上新功能与修复。
-          <button onClick={() => location.reload()}>立即刷新</button>
+          <button className="px-btn px-btn-amber min-h-7 px-2 py-0.5 text-xs" onClick={() => location.reload()} type="button">立即刷新</button>
         </div>
       )}
-      {renderView()}
+      {page}
     </>
   )
+}
+
+function route(path: string, credential: CredentialStatus | undefined, health: PlatformHealth, onCredential: () => void) {
+  const game = (section: string) => matchPath(`/games/:id/${section}`, path)?.id
+  let id: string | undefined
+  if (path === '/' || path === '') return <TitlePage health={health} credential={credential} />
+  if (path === '/games') return <GamesPage />
+  if (path === '/games/new') return <NewGamePage credential={credential} />
+  if ((id = game('play'))) return <PlayPage key={id} gameId={id} />
+  if ((id = game('status'))) return <StatusPage key={id} gameId={id} />
+  if ((id = game('characters'))) return <CharactersPage key={id} gameId={id} />
+  if ((id = game('history'))) return <HistoryPage key={id} gameId={id} />
+  if ((id = game('memory'))) return <MemoryPage key={id} gameId={id} />
+  if ((id = game('settings'))) return <ScriptPage key={id} gameId={id} />
+  if ((id = game('camp'))) return <CampPage key={id} gameId={id} />
+  if ((id = matchPath('/games/:id', path)?.id)) return <Redirect to={`/games/${id}/play`} />
+  if (path === '/library') return <LibraryPage />
+  if ((id = matchPath('/library/:id/edit', path)?.id)) return <EditPage key={id} scenarioId={id} />
+  if ((id = matchPath('/library/:id', path)?.id)) return <ScenarioPage key={id} scenarioId={id} credential={credential} />
+  if (path === '/workshop') return <Redirect to="/games/new" />
+  if (path === '/settings') return <SettingsPage credential={credential} onChanged={onCredential} />
+  return <Redirect to="/" />
+}
+
+function Redirect({ to }: { to: string }) {
+  useEffect(() => navigate(to, { replace: true }), [to])
+  return null
 }
