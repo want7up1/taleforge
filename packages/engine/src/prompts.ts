@@ -338,9 +338,38 @@ export function settlementBrief(state: SessionState, story: Story, options: { fi
     const n = story.craft.action_options
     const pressure = act ? pressureOf(state.progress, act.pace) : undefined
     const next = act ? remainingAnchors(state.progress, acts).find(a => a.required) : undefined
-    sections.push(`options（给玩家的 ${n} 个下一步行动）：每条是玩家此刻可以立刻去做的具体行动——谁、做什么、对谁或往哪，一句话；不写"继续""看看情况"这类空话，不带编号。第一条推动当前幕目标${pressure?.level === 'high' && next ? `，直指「${next.text}」` : ''}；其余给出不同的策略、风险或信息方向。${phaseOf(state) === 'finale' ? '主线已经全部达成：这是走向结局前的最后一步。' : ''}`)
+    sections.push([
+      `options（给玩家的 ${n} 个下一步行动）：每条是玩家此刻可以立刻去做的具体行动——谁、做什么、对谁或往哪，一句话；不写"继续""看看情况"这类空话，不带编号。`,
+      '从这一章的结尾往下走：结尾刚出现的东西（一个声音、一个人、一处变化）至少有一条选项直接回应它。',
+      `第一条推动当前幕目标${pressure?.level === 'high' && next ? `，直指「${next.text}」` : ''}；其余给出不同的策略、风险或信息方向。`,
+      repeatGuard(state),
+      phaseOf(state) === 'finale' ? '主线已经全部达成：这是走向结局前的最后一步。' : '',
+    ].join(''))
   }
   return sections.join('\n\n')
+}
+
+/**
+ * 选项别原地打转：把玩家这一步刚做的事、上一回合给过的选项原样摆出来，要求不换个说法再给一遍。
+ * 实测（2026-09-29 线上）：玩家选了"逼潘雅把昨天看到的说清楚"，这一章写成她体力不支、没问完，
+ * 结尾楼梯上响了一声——结算给的第一条却是"把车库、货梯井……一句句问到底"，同一件事换了个说法，
+ * 也没有一条回应结尾那声响。给出原句是事实，比"别重复"这种判断更好执行。
+ */
+function repeatGuard(state: SessionState): string {
+  const chapter = state.chapters[state.chapters.length - 1]
+  const clip = (t: string) => (t.length > 60 ? `${t.slice(0, 60)}…` : t)
+  // 开场章没有"上一步"；（开始）这类整句括起来的是界面发的控制口令，不是玩家的行动
+  if (!chapter || chapter.turn <= 1) return ''
+  const raw = chapter.input.trim()
+  const taken = /^（[^）]*）$/.test(raw) ? '' : raw.replace(/^[A-E][.．、]\s*/, '')
+  const last = state.lastSettlement
+  const offered = last && last.turn === chapter.turn - 1 ? last.receipt.options : []
+  if (!taken && !offered.length) return ''
+  const parts = [
+    taken ? `玩家这一步刚做的是「${clip(taken)}」` : '',
+    offered.length ? `上一回合给过的是${offered.map(o => `「${clip(o)}」`).join('')}` : '',
+  ].filter(Boolean)
+  return `不原地打转：${parts.join('；')}——不要把它们换个说法再给一遍。刚做的事没做完、还要接着做，就写清接着做的是哪一个新的动作（同一件事换个说法、换个角度都不算新动作）。`
 }
 
 // ---- 前情提要 ----

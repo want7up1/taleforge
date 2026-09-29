@@ -62,7 +62,9 @@ export class DeepSeekClient implements LlmClient {
   async chat(request: ChatRequest, options: ChatOptions = {}): Promise<ChatResult> {
     const delays = [1000, 3000]
     for (let attempt = 0; ; attempt++) {
-      // 一旦有增量推给了界面就不再重试：重来一遍会让玩家看到两段开头
+      // 一旦有正文推给了界面就不再重试：重来一遍会让玩家看到两段开头。
+      // 推理不算——它不上屏（界面只显示"构思中"），思考到一半断线重来，玩家什么都看不到。
+      // 实测（2026-09-29 线上）：正文步思考 5 秒时连接被掐断（TypeError: terminated），整回合失败。
       const emitted = { any: false }
       try {
         return await this.once(request, options, emitted)
@@ -103,10 +105,7 @@ export class DeepSeekClient implements LlmClient {
     const feed = (payloads: string[]) => {
       for (const payload of payloads) {
         const delta = assembler.push(payload)
-        if (delta.reasoning) {
-          emitted.any = true
-          options.handlers?.onReasoning?.(delta.reasoning)
-        }
+        if (delta.reasoning) options.handlers?.onReasoning?.(delta.reasoning)
         if (delta.text) {
           emitted.any = true
           firstTextMs ??= Date.now() - started

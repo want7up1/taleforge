@@ -205,3 +205,21 @@ test('词库：强度提醒触发时，从选用的词库里挑最近几章没�
   const none = renderPlayTail({ state: bland, story: testStory(), input: 'x', opening: false })
   assert.doesNotMatch(none, /词库里/, '没选词库就只有事实本身')
 })
+
+test('选项不原地打转：结算指令原样摆出玩家刚做的事和上一回合的选项，并要求从这一章的结尾往下走', () => {
+  const chapter = (turn: number, text: string) => [ev('turn/start', { kind: 'play', turn }), ev('chapter', { turn, text, toolRoundsBeforeText: 0, steps: [] })]
+  const receipt = (options: string[]) => ({ anchors: { accepted: [], ignored: [] }, upkeep: [], resources: [], attributes: [], inventory: [], options, rejected: [], ended: false })
+  const opening = stateAfter(ev('player/input', { text: '（开始）' }), ...chapter(1, '第一章'))
+  const first = settlementBrief(opening, testStory(), { finale: false })
+  assert.match(first, /从这一章的结尾往下走：结尾刚出现的东西/)
+  assert.doesNotMatch(first, /不原地打转/, '开场章没有"上一步"，（开始）也不是玩家的行动')
+  const second = stateAfter(
+    ev('player/input', { text: '（开始）' }), ...chapter(1, '第一章'),
+    ev('settlement', { turn: 1, receipt: receipt(['逼她把昨天看到的说清楚', '退到铁门边守住退路']) }),
+    ev('player/input', { text: 'A. 逼她把昨天看到的说清楚' }), ...chapter(2, '第二章'),
+  )
+  const brief = settlementBrief(second, testStory(), { finale: false })
+  assert.match(brief, /玩家这一步刚做的是「逼她把昨天看到的说清楚」/, '选项字母去掉')
+  assert.match(brief, /上一回合给过的是「逼她把昨天看到的说清楚」「退到铁门边守住退路」——不要把它们换个说法再给一遍/)
+  assert.match(brief, /同一件事换个说法、换个角度都不算新动作/)
+})

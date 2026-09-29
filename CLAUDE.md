@@ -81,7 +81,7 @@ F1 契约定稿（story v1、persona 底座收缩 + 工艺模块化、创作说�
 ### 架构
 
 - **单进程 Node/TS**，express 5。三个新包：
-  - `packages/llm`：DeepSeek 客户端。fetch + SSE 解析、工具调用按 index 分片拼装、reasoning 回传、取消、首字耗时与缓存用量统计；5xx/429/断网在没有任何输出前重试两次。不用 `@ai-sdk/deepseek`（多轮 reasoning 回传出过 bug，vercel/ai #10778）。
+  - `packages/llm`：DeepSeek 客户端。fetch + SSE 解析、工具调用按 index 分片拼装、reasoning 回传、取消、首字耗时与缓存用量统计；5xx/429/断网在正文上屏之前重试两次（推理不算上屏：思考到一半断线重来，玩家看不到；2026-09-29 线上实测正文步思考 5 秒被掐断、整回合失败后改的）。不用 `@ai-sdk/deepseek`（多轮 reasoning 回传出过 bug，vercel/ai #10778）。
   - `packages/engine`：回合流水线（`engine.ts`）、会话折叠（`fold.ts`，**唯一的一份重放实现**）、上下文组装（`prompts.ts`）、结算步（`settle.ts`）、另两件工具（`tools.ts`）、被动观测（`observer.ts`）、漂移回灌（`drift.ts`）。`testkit.ts` 是按请求形状分派的假模型，测试与本地 E2E 用，不进生产导出。
   - `packages/store`：每个会话一个 JSONL 事件日志。追加用 O_APPEND、读时容忍残缺尾行；重写（截断/读档）先写临时文件再 rename。事件与流式增量共用一条单调 seq（增量不落盘，序号照样占用）。
 - **复用的纯逻辑**：mechanics（resources/check/inventory/progression/types）、progress（progress/types + 修订校验）、scenario-compiler（schema/persona/merge/catalog）、workshop（发布/留档/回滚/写法体检）、前端 fold。dsh 插件外壳全部删掉。
@@ -119,7 +119,7 @@ K、N 缺省 5、4（`v2/settings.json` 的 recentChapters / recapEvery 可调�
 
 **工具列表整局稳定**：一局游戏的每个请求（正文、结算、场外、前情提要）都带同一份 `[settle_turn, roll_check?, revise_setting]`，能不能调由 tool_choice 与执行侧把关（调错了回一句出路）。工具定义渲染在提示词最前面，一变就打散整段前缀缓存；enum 只在转幕与修订时变。
 
-**结算步 `settle_turn`**（`packages/engine/src/settle.ts`）：参数结构由剧本启用的模块拼出来，引用既有条目的 id 全是 enum（护栏 3）：anchors（当前幕全部锚点）、resources/attributes（id + delta + reason）、inventory（gain/lose/consume/destroy）、xp（amount/reason/points）、options（≤ action_options 条）。裁决次序：周期收支 → 资源 → 属性 → 物品 → 经验 → 锚点（周期收支在前，播种那一章的苗不会当章就长）。机制细则只写在结算指令里；对照的就是刚写完的这一章。
+**结算步 `settle_turn`**（`packages/engine/src/settle.ts`）：参数结构由剧本启用的模块拼出来，引用既有条目的 id 全是 enum（护栏 3）：anchors（当前幕全部锚点）、resources/attributes（id + delta + reason）、inventory（gain/lose/consume/destroy）、xp（amount/reason/points）、options（≤ action_options 条；结算指令要求从这一章的结尾往下走，并原样摆出玩家刚做的事和上一回合的选项、不许换个说法再给一遍——2026-09-29 线上出现过选项原地打转）。裁决次序：周期收支 → 资源 → 属性 → 物品 → 经验 → 锚点（周期收支在前，播种那一章的苗不会当章就长）。机制细则只写在结算指令里；对照的就是刚写完的这一章。
 
 **事件类型**：session/created（含开局剧本快照——会话锁定这一代，热字段除外）、model/selected、player/input、turn/start、points/spent、check/rolled、chapter、settlement、act/advanced、ending/declared、revision、reply（场外答复）、recap、turn/end；工坊与修改对话另有 agent/message、tool/result。发给前端前剥掉剧本快照（含隐藏真相）、推理文本与结算原始参数（`publicEvent`）。
 

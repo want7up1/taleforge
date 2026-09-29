@@ -135,6 +135,18 @@ export function publicEvent(event: StoredEvent): StoredEvent {
 }
 
 /**
+ * 回合失败时给玩家看的话：网络和资源类故障说人话、告诉他怎么办；原始错误照旧打进服务日志。
+ * 实测（2026-09-29）：界面直接显示「DeepSeek 流中断：TypeError: terminated」，玩家只能理解成"流式传输坏了"。
+ */
+export function turnErrorText(err: unknown): string {
+  const e = (typeof err === 'object' && err !== null ? err : {}) as { code?: unknown; status?: unknown }
+  const status = typeof e.status === 'number' ? e.status : 0
+  if (e.code === 'network') return '和 DeepSeek 的连接中途断了，这一回合没写成——再选一次就好（平台已经自动重试过）。'
+  if (e.code === 'overloaded' || (e.code === 'http' && (status === 429 || status >= 500))) return 'DeepSeek 这会儿忙不过来，这一回合没写成——等几秒再选一次。'
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
  * 玩家行动里的【加点】行（前端按属性显示名写：`【加点】力量 +2、敏捷 +1`）→ 属性 id 与点数。
  * 换算用现行属性名录（含改名修订），认不出的名字忽略。返回去掉这一行的行动原话。
  */
@@ -396,7 +408,7 @@ export class Engine {
             kind: open.kind,
             turn: open.turn,
             reason: aborted ? 'cancelled' : 'error',
-            ...aborted ? {} : { error: err instanceof Error ? err.message : String(err) },
+            ...aborted ? {} : { error: turnErrorText(err) },
           }
           this.append(sessionId, 'turn/end', end)
           this.observe(sessionId)

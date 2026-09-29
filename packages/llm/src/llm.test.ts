@@ -126,6 +126,46 @@ test('客户端：5xx 在没有任何输出前重试，401 不重试', async () 
   assert.equal(authCalls, 1)
 })
 
+test('客户端：思考到一半断线照样重试（推理不上屏）；正文已经上屏就不再重试（免得两段开头）', async () => {
+  // 逐次读取：先把给定的片交出去（客户端真的读到了），下一次读时再断线
+  const cut = (frames: string[]) => {
+    const queue = [...frames]
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const next = queue.shift()
+        if (next !== undefined) controller.enqueue(new TextEncoder().encode(next))
+        else controller.error(new TypeError('terminated'))
+      },
+    }), { status: 200 })
+  }
+  let calls = 0
+  const thinking = new DeepSeekClient({
+    apiKey: () => 'sk-test',
+    fetch: async () => {
+      calls++
+      return calls === 1
+        ? cut([frame({ choices: [{ delta: { reasoning_content: '想' } }] })])
+        : streamResponse([frame({ choices: [{ delta: { content: '正文' }, finish_reason: 'stop' }] })])
+    },
+  })
+  const texts: string[] = []
+  const result = await thinking.chat({ model: 'm', messages: [], thinking: true }, { handlers: { onText: t => texts.push(t) } })
+  assert.equal(result.content, '正文')
+  assert.equal(calls, 2, '推理断了重来一次')
+  assert.deepEqual(texts, ['正文'], '玩家只看到一段正文')
+
+  let textCalls = 0
+  const writing = new DeepSeekClient({
+    apiKey: () => 'sk-test',
+    fetch: async () => {
+      textCalls++
+      return cut([frame({ choices: [{ delta: { content: '写了一半' } }] })])
+    },
+  })
+  await assert.rejects(writing.chat({ model: 'm', messages: [], thinking: true }), (err: unknown) => err instanceof LlmError && err.code === 'network')
+  assert.equal(textCalls, 1, '正文上屏之后不重试')
+})
+
 test('客户端：没配 Key 直接报可读错误，不发请求', async () => {
   const client = new DeepSeekClient({ apiKey: () => undefined, fetch: async () => { throw new Error('不该发请求') } })
   await assert.rejects(client.chat({ model: 'm', messages: [], thinking: false }), (err: unknown) =>
