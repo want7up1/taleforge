@@ -161,3 +161,27 @@ test('观测：合规正戏回合零违规，记篇幅、标记、选项、缓�
   const aborted = inspectTurn('s', [ev('turn/start', { kind: 'play', turn: 1 }), ev('turn/end', { kind: 'play', turn: 1, reason: 'cancelled' })])
   assert.equal(aborted.kind, 'aborted')
 })
+
+test('绑定人物的数值条：人物登场前不进面板快照、不进结算指令；登场那一章起才出现', () => {
+  const input = structuredClone(testStoryInput)
+  ;(input.mechanics.resources as Record<string, unknown>[]).push({ id: 'trust-su', label: '苏晚·信任', group: 'affinity', min: 0, max: 100, initial: 5, maxStep: 10, guidance: '并肩 +5', revealWith: 'su' })
+  const story = storySchema.parse(input)
+  const created2 = ev('session/created', { kind: 'game', title: 'x', model: { model: 'm', effort: 'high' }, story, storyId: story.id })
+  const before = foldSession([created2, ev('turn/start', { kind: 'play', turn: 1 }), ev('chapter', { turn: 1, text: '车站空无一人。', toolRoundsBeforeText: 0, steps: [] })])
+  assert.doesNotMatch(panelLines(before, story).join(), /苏晚·信任/)
+  const briefBefore = settlementBrief(before, story, { finale: false })
+  assert.doesNotMatch(briefBefore, /trust-su/)
+  assert.match(briefBefore, /另有 1 条绑定在还没登场的人物身上/)
+  const after = foldSession([created2, ev('turn/start', { kind: 'play', turn: 1 }), ev('chapter', { turn: 1, text: '晚晴……不，苏晚晴站在月台上。', toolRoundsBeforeText: 0, steps: [] })])
+  assert.match(panelLines(after, story).join(), /苏晚·信任5/)
+  assert.match(settlementBrief(after, story, { finale: false }), /trust-su（苏晚·信任/)
+})
+
+test('旧剧本里写着 grant_xp、adjust_resources、"回执会告诉你"：结算指令附一句新旧对照；新剧本不附', () => {
+  assert.doesNotMatch(settlementBrief(stateAfter(), testStory(), { finale: false }), /旧版的工具名/)
+  const input = structuredClone(testStoryInput)
+  input.craft.rules = ['结算铁律：性场景当回合必须用工具落账——grant_xp（一对一 +1、points+1），不要再调adjust_resources重复记。']
+  const story = storySchema.parse(input)
+  const brief = settlementBrief(foldSession([ev('session/created', { kind: 'game', title: 'x', model: { model: 'm', effort: 'high' }, story, storyId: story.id })]), story, { finale: false })
+  assert.match(brief, /旧版的工具名[\s\S]*xp\.points/)
+})

@@ -75,6 +75,23 @@ export function renderStable(state: SessionState): string {
 // ---- ⑤ 临时尾部 ----
 
 /**
+ * 已在正文里登场的人物：全名或去姓的简称（林绾绾→绾绾，≥2 字）出现过就算。与前端的防剧透同一条规则。
+ * 绑了 revealWith 的数值条（某人的好感、欲望……）在她登场前既不进面板快照、也不进结算指令——
+ * 线上两部剧本各有 12–13 条这样的条目，前几幕每回合白背十几条根本用不上的说明。
+ */
+export function metCast(state: SessionState, story: Story): Set<string> {
+  const corpus = state.chapters.map(c => c.text).join('\n')
+  const met = new Set<string>()
+  for (const c of story.cast) {
+    const short = c.name.length >= 3 ? c.name.slice(1) : ''
+    if (corpus.includes(c.name) || (short.length >= 2 && corpus.includes(short))) met.add(c.id)
+  }
+  return met
+}
+
+const revealed = (def: { revealWith?: string }, met: Set<string>) => !def.revealWith || met.has(def.revealWith)
+
+/**
  * 面板即时快照（治"GM 忘了物品栏里有什么"与在正文里发明装备）：长局里开局清单早被稀释，
  * 实测物品栏躺着钢管，正文抡了五回合不存在的折叠椅。hidden 资源一并给 GM，标明玩家看不见。
  */
@@ -94,7 +111,9 @@ export function panelLines(state: SessionState, story: Story): string[] {
   if (attrs.length) lines.push(`属性：${attrs.join(' ')}`)
   const groupTitle = { self: '自身', affinity: '好感', world: '队伍' } as const
   const byGroup = new Map<string, string[]>()
+  const met = metCast(state, story)
   for (const d of resourceDefs(story, revisions)) {
+    if (!revealed(d, met)) continue
     const value = state.values[d.id]?.value ?? d.initial
     if (!byGroup.has(d.group)) byGroup.set(d.group, [])
     byGroup.get(d.group)!.push(`${d.label}${value}${d.display === 'hidden' ? '（隐藏）' : ''}`)
@@ -233,6 +252,31 @@ export function renderOffstageMessage(state: SessionState, story: Story, ask: st
 
 // ---- 结算步 ----
 
+/** 旧版（dsh 时代）的工具名。按旧流程写的剧本文本里还留着它们。 */
+const LEGACY_TOOLS = /grant_xp|spend_points|adjust_resources|adjust_attributes|adjust_inventory|report_progress|回执会告诉你|回执会列出/
+
+/**
+ * 旧剧本兼容：剧本文本里写着"用 grant_xp 落账""回执会列出"这类旧流程的说法时，给结算步一句映射。
+ * 不去改写剧本原文——那是作者层；平台只负责把旧说法翻译成现在的字段。
+ */
+export const LEGACY_TOOLS_NOTE = '剧本文本里的 grant_xp（经验）与它的 points（剧情奖励属性点）、adjust_resources / adjust_attributes / adjust_inventory、report_progress 都是旧版的工具名：'
+  + '现在一律记在这一次 settle_turn 里——经验写 xp.amount，剧情奖励属性点写 xp.points，资源、属性、物品写对应字段，锚点写 anchors。'
+  + '剧本说的"回执会告诉你 / 回执会列出"，指的就是下面列出的周期收支。'
+
+export function mentionsLegacyTools(story: Story): boolean {
+  const texts = [
+    ...story.craft.rules,
+    story.craft.reminder ?? '',
+    ...story.acts.map(a => a.reminder ?? ''),
+    ...(story.mechanics?.resources ?? []).map(r => r.guidance),
+    ...(story.mechanics?.attributes ?? []).map(a => a.guidance),
+    story.mechanics?.checks?.guidance ?? '',
+    story.mechanics?.inventory?.guidance ?? '',
+    story.mechanics?.progression?.guidance ?? '',
+  ]
+  return texts.some(t => LEGACY_TOOLS.test(t))
+}
+
 /**
  * 结算步指令：正文已经定稿，照着刚写完的这一章结清。机制细则全在这里——
  * 锚点完成信号、每条资源的 guidance、物品规则、经验规则、选项要求。
@@ -244,6 +288,7 @@ export function settlementBrief(state: SessionState, story: Story, options: { fi
   const act = acts[state.progress.actIndex]
   const mech = story.mechanics
   const sections: string[] = ['【结算】上面这一章已经定稿。现在调用 settle_turn 把它结清——只看这一章里真实写出来的内容，不预支下一章。']
+  if (mentionsLegacyTools(story)) sections.push(LEGACY_TOOLS_NOTE)
 
   if (act && !options.finale) {
     const remaining = remainingAnchors(state.progress, acts)
@@ -255,12 +300,15 @@ export function settlementBrief(state: SessionState, story: Story, options: { fi
 
   const upkeep = mech?.upkeep ?? []
   if (mech?.resources?.length) {
-    const defs = resourceDefs(story, revisions)
+    const met = metCast(state, story)
+    const all = resourceDefs(story, revisions)
+    const defs = all.filter(d => revealed(d, met))
+    const pending = all.length - defs.length
     sections.push(`resources（资源）：这一章的事件落进了下面哪条说明，就记哪条——判断标准是"事件类型对不对得上"，不是"变化够不够大"：一次遭遇战、一次并肩逃生、一夜休整都要记。没有变化传空数组。增减多少你按剧情定，系统会裁掉越界的部分。\n${defs
       .map(d => `- ${d.id}（${d.label}，当前 ${state.values[d.id]?.value ?? d.initial}，${d.min}–${d.max}，单次最多 ±${d.maxStep}${d.display === 'hidden' ? '，玩家看不见但照样记账' : ''}）：${d.guidance}`)
       .join('\n')}${upkeep.length
       ? `\n周期收支已由系统自动结算（${upkeep.map(u => `${u.reason}：${defs.find(d => d.id === u.id)?.label ?? u.id} ${u.delta > 0 ? '+' : ''}${u.delta}`).join('；')}），不要重复记。`
-      : ''}`)
+      : ''}${pending > 0 ? `\n另有 ${pending} 条绑定在还没登场的人物身上，人物登场之前不记。` : ''}`)
   }
 
   if (mech?.attributes?.length) {

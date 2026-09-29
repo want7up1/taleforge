@@ -123,6 +123,10 @@ K、N 缺省 5、4（`v2/settings.json` 的 recentChapters / recapEvery 可调�
 
 **事件类型**：session/created（含开局剧本快照——会话锁定这一代，热字段除外）、model/selected、player/input、turn/start、points/spent、check/rolled、chapter、settlement、act/advanced、ending/declared、revision、reply（场外答复）、recap、turn/end；工坊与修改对话另有 agent/message、tool/result。发给前端前剥掉剧本快照（含隐藏真相）、推理文本与结算原始参数（`publicEvent`）。
 
+**绑定人物的数值条**（`revealWith`）：人物在正文里登场之前，既不进临时尾部的面板快照、也不进结算指令（结算指令只注明"另有 N 条"）；settle_turn 的 enum 照旧全列，保住工具定义的缓存。线上两部剧本各有 12–13 条，前几幕的结算指令因此短了一半左右。
+
+**旧剧本兼容**：剧本文本里还写着 grant_xp / points / adjust_resources / report_progress / "回执会告诉你"这类旧流程说法时，结算指令附一句新旧对照（`LEGACY_TOOLS_NOTE`）。平台不改写剧本原文——那是作者层。
+
 **热字段**：进行中的局每回合现读剧本现行版的 `craft.reminder`、`acts[].reminder`、`craft.intensity_words`、`lore`——改剧本重新发布后下一回合就吃到；其余字段锁在开局快照里，下一局生效。
 
 **数据根**（沿用旧路径，数据卷不用改；容器里 `/app/runtime/dsh-home`，本地 `runtime/dsh-home`，环境变量 `TALEFORGE_HOME`，兼容旧的 `DSH_HOME`）：
