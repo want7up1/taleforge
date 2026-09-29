@@ -60,6 +60,9 @@ export function PlayPage({ gameId }: { gameId: string }) {
   const [showOnboarding, setShowOnboarding] = useState(false)
   /** 待分配的加点（属性 id → 点数）：在手账里攒，随下一步行动发送，由代码直接落账 */
   const [alloc, setAlloc] = useState<Record<string, number>>({})
+  /** 待领取的奖励（组 id → 选中的候选名）：和加点一样随下一步行动发送，由代码落账 */
+  const [claims, setClaims] = useState<Record<string, string>>({})
+  const [rewardsOpen, setRewardsOpen] = useState(false)
   const scrollRef = useRef<HTMLElement>(null)
   const [hasMore, setHasMore] = useState(false)
 
@@ -67,6 +70,7 @@ export function PlayPage({ gameId }: { gameId: string }) {
     api.sessionStory(gameId).then(setStory).catch(() => undefined)
     api.sessionModel(gameId).then(setCatalog).catch(() => undefined)
     setAlloc({})
+    setClaims({})
   }, [gameId])
 
   // 首次进游玩页弹一次引导卡，localStorage 记忆后不再打扰
@@ -103,7 +107,7 @@ export function PlayPage({ gameId }: { gameId: string }) {
     requestAnimationFrame(syncScroll)
   }, [s.messages, s.streaming, s.digest, composerOpen, syncScroll])
 
-  const { mechanics, attributes, progress, progression, stats } = s.panels
+  const { mechanics, attributes, progress, progression, rewards, stats } = s.panels
   const chapters = s.messages.filter(m => m.role === 'assistant' && m.kind === 'play')
   const latest = chapters.length ? parseTurn(chapters[chapters.length - 1].text) : undefined
   const lastAction = [...s.messages].reverse().find(m => m.role === 'user' && m.kind === 'play')?.text
@@ -137,15 +141,24 @@ export function PlayPage({ gameId }: { gameId: string }) {
     return parts.length ? `【加点】${parts.join('、')}` : ''
   }, [alloc, attributes])
 
+  // 每领一组写一行（组名：候选名），界面照抄待领取清单里的原文，内核按原文对上
+  const claimLines = useMemo(() => (rewards?.pending ?? [])
+    .filter(o => claims[o.id])
+    .map(o => `【领取】${o.title}：${claims[o.id]}`), [claims, rewards])
+
   const send = async (text: string) => {
     if (!text.trim()) return
     setComposerOpen(false)
     setInput('')
     setActionMode('action')
-    // 手打的【场外】走场外协议，加点不能搭这班车
-    const carry = Boolean(allocLine) && !text.trimStart().startsWith('【场外】')
-    await s.send(carry ? `${text.trim()}\n${allocLine}` : text)
-    if (carry) setAlloc({})
+    // 手打的【场外】走场外协议，加点与领取都不能搭这班车
+    const extras = text.trimStart().startsWith('【场外】') ? [] : [allocLine, ...claimLines].filter(Boolean)
+    await s.send(extras.length ? `${text.trim()}\n${extras.join('\n')}` : text)
+    if (extras.length) {
+      setAlloc({})
+      setClaims({})
+      setRewardsOpen(false)
+    }
   }
 
   const submitComposer = (event: FormEvent<HTMLFormElement>) => {
@@ -315,6 +328,42 @@ export function PlayPage({ gameId }: { gameId: string }) {
                     {allocLine && <button className="px-btn min-h-8 px-2 py-1 text-xs" onClick={() => setAlloc({})} type="button">清除</button>}
                   </span>
                 </div>
+              )}
+
+              {idle && !ended && rewards && rewards.pending.length > 0 && (
+                <section className="alloc-box reward-box">
+                  <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                    <span>
+                      {claimLines.length
+                        ? `◆ 已选 ${claimLines.length} 组${rewards.label}：${rewards.pending.filter(o => claims[o.id]).map(o => claims[o.id]).join('、')}（随下一步行动生效）`
+                        : `◆ 有 ${rewards.pending.length} 组${rewards.label}待领取`}
+                    </span>
+                    <span className="flex gap-2">
+                      <button className="px-btn min-h-8 px-2 py-1 text-xs" onClick={() => setRewardsOpen(o => !o)} type="button">{rewardsOpen ? '收起' : claimLines.length ? '调整' : '去领取'}</button>
+                      {claimLines.length > 0 && <button className="px-btn min-h-8 px-2 py-1 text-xs" onClick={() => setClaims({})} type="button">清除</button>}
+                    </span>
+                  </div>
+                  {rewardsOpen && rewards.pending.map(offer => (
+                    <div className="grid w-full gap-2" key={offer.id}>
+                      <p className="text-xs font-bold">{offer.title}（第 {offer.turn} 回合 · 选一个）</p>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {offer.choices.map(choice => (
+                          <button
+                            aria-pressed={claims[offer.id] === choice.title}
+                            className={`reward-pick ${claims[offer.id] === choice.title ? 'reward-pick-active' : ''}`}
+                            key={choice.title}
+                            onClick={() => setClaims(c => (c[offer.id] === choice.title ? Object.fromEntries(Object.entries(c).filter(([k]) => k !== offer.id)) : { ...c, [offer.id]: choice.title }))}
+                            type="button"
+                          >
+                            <strong>{choice.title}</strong>
+                            {choice.detail && <span>{choice.detail}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {rewardsOpen && <p className="w-full text-xs text-[color:var(--muted)]">选好之后照常选一个行动（或自己输入），领取会随这一步一起生效；没选的候选作废。</p>}
+                </section>
               )}
 
               {options.length > 0 && (

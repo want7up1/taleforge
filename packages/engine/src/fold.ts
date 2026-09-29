@@ -31,6 +31,8 @@ import type {
   RecapData,
   ReplyData,
   RevisionData,
+  RewardClaimedData,
+  RewardOffer,
   SettlementData,
   StepUsage,
   TurnStartData,
@@ -73,6 +75,10 @@ export interface SessionState {
   lastChecks: CheckData[]
   /** 最近一次加点（本回合落账的才贴进尾部） */
   lastPoints?: PointsSpentData
+  /** 还没领取的奖励候选组（结算记下、玩家领取后移除） */
+  offers: RewardOffer[]
+  /** 本回合玩家领取的奖励（贴进尾部与结算指令） */
+  lastClaims: RewardClaimedData[]
   stats: SessionStats
   /** 已开始但还没结束的回合 */
   open?: { seq: number; data: TurnStartData }
@@ -128,6 +134,8 @@ export function foldSession(events: readonly StoredEvent[]): SessionState {
     chapters: [],
     offstage: [],
     lastChecks: [],
+    offers: [],
+    lastClaims: [],
     stats: { turns: 0, llmMs: 0, decodeTokens: 0, promptTokens: 0, cacheHitTokens: 0 },
   }
   let pendingAsk: string | undefined
@@ -153,6 +161,7 @@ export function foldSession(events: readonly StoredEvent[]): SessionState {
           state.stats.turns = data.turn
           state.lastChecks = []
           state.lastPoints = undefined
+          state.lastClaims = []
         }
         break
       }
@@ -166,6 +175,14 @@ export function foldSession(events: readonly StoredEvent[]): SessionState {
         state.attrs = attrs
         state.progression = reduceProgression(state.progression, { kind: 'mechanics/attributes', changes: data.changes, points: { spent: data.spent } })
         state.lastPoints = data
+        break
+      }
+      case 'reward/claimed': {
+        const data = event.data as unknown as RewardClaimedData
+        state.offers = state.offers.filter(o => o.id !== data.offerId)
+        state.lastClaims = [...state.lastClaims, data]
+        const c = data.counter
+        if (c && c.id in state.values) state.values = { ...state.values, [c.id]: { value: c.after, last: { applied: c.applied, reason: c.reason } } }
         break
       }
       case 'check/rolled':
@@ -192,7 +209,8 @@ export function foldSession(events: readonly StoredEvent[]): SessionState {
         // 结算步失败时回执里只有代码自己算的周期收支，照样落账（每个正戏回合结算一次由代码保证）
         const r = data.receipt
         const values = { ...state.values }
-        for (const c of [...r.upkeep, ...r.resources]) {
+        if (r.offers?.length) state.offers = [...state.offers, ...r.offers]
+        for (const c of [...r.upkeep, ...r.resources, ...r.counter ? [r.counter] : []]) {
           if (c.id in values) values[c.id] = { value: c.after, last: { applied: c.applied, reason: c.reason } }
         }
         state.values = values

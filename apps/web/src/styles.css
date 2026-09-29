@@ -1774,3 +1774,40 @@ input[type="radio"]:checked::after {
   color: var(--amber);
   font-size: 0.8rem;
 }
+
+/* 奖励领取：待领取的一组候选，一组选一个（和加点一样随下一步行动生效） */
+.reward-box {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.reward-pick {
+  display: grid;
+  gap: 0.25rem;
+  border: 2px solid var(--border);
+  background: var(--input);
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  color: var(--foreground);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.reward-pick span {
+  color: var(--muted);
+}
+
+.reward-pick:hover {
+  border-color: var(--amber);
+}
+
+.reward-pick-active {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px rgba(255, 179, 71, 0.25);
+}
+
+.reward-pick-active strong::before {
+  content: "✓ ";
+  color: var(--amber);
+}

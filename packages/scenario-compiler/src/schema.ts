@@ -204,13 +204,28 @@ export const storySchema = z.object({
       })
         .refine(p => !p.levelNames || p.levelNames.length === p.thresholds.length + 1, 'levelNames 长度必须等于 thresholds 长度 + 1（每级一个名字）')
         .optional(),
+      /**
+       * 奖励领取（2026-09-29 用户要求，和加点同一个路数）：正文里给出一组可选的奖励候选时，结算步把这一组
+       * 结构化记下来；玩家在界面上自己选一个，随下一步行动由代码落账，GM 不替玩家选。
+       * counter 填一条资源 id：由代码保持它等于"待领取的组数"，GM 不用再记（它会记错：线上实测漏记、重复记都有）。
+       */
+      rewards: z.object({
+        /** 显示名（"神级选择""战利品"……） */
+        label: z.string().min(1).max(12).default('奖励'),
+        /** 什么时候给候选、一组几个候选、选中之后怎么落账——机械规则 */
+        guidance: z.string().min(1),
+        counter: z.string().optional(),
+      }).optional(),
     })
-    .refine(m => m.resources || m.attributes || m.checks || m.inventory, '声明了 mechanics 就至少要启用一个模块')
+    .refine(m => m.resources || m.attributes || m.checks || m.inventory || m.rewards, '声明了 mechanics 就至少要启用一个模块')
     .refine(m => !m.progression || m.attributes, '经验等级需要同时声明 attributes——属性点要加在属性上')
     // upkeep 的 id 写错不会报错，只会永远不结算：裁决时查不到定义就跳过那一笔，
     // 面板上只是"这个数字一直不动"，作者很难联想到是 id 打错了。发布时就拦下来。
     .superRefine((m, ctx) => {
       const ids = new Set((m.resources ?? []).map(r => r.id))
+      if (m.rewards?.counter && !ids.has(m.rewards.counter)) {
+        ctx.addIssue({ code: 'custom', path: ['rewards', 'counter'], message: `奖励计数引用了未声明的资源「${m.rewards.counter}」` })
+      }
       m.upkeep?.forEach((u, i) => {
         if (!ids.has(u.id)) {
           ctx.addIssue({

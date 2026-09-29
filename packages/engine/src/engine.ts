@@ -29,6 +29,8 @@ import type {
   PointsSpentData,
   RecapData,
   ReplyData,
+  RewardClaimedData,
+  RewardOffer,
   SettlementData,
   StepUsage,
   ToolResultData,
@@ -36,7 +38,7 @@ import type {
   TurnStartData,
 } from './events.ts'
 import { actsOf, attributeDefs, foldSession, phaseOf, type SessionState } from './fold.ts'
-import { inspectTurn, lastTurnSlice, writeRecord } from './observer.ts'
+import { echoContextOf, inspectTurn, lastTurnSlice, writeRecord } from './observer.ts'
 import {
   hotStory,
   proseOf,
@@ -46,7 +48,7 @@ import {
   settlementBrief,
   windowChapters,
 } from './prompts.ts'
-import { SETTLE_TOOL, adjudicate } from './settle.ts'
+import { SETTLE_TOOL, adjudicate, alignRewardCounter } from './settle.ts'
 import { CHECK_TOOL, REVISE_TOOL, gameTools, parseArgs, runCheck, runRevise } from './tools.ts'
 import { sessionView, type SessionView } from './view.ts'
 
@@ -144,6 +146,34 @@ export function turnErrorText(err: unknown): string {
   if (e.code === 'network') return '和 DeepSeek 的连接中途断了，这一回合没写成——再选一次就好（平台已经自动重试过）。'
   if (e.code === 'overloaded' || (e.code === 'http' && (status === 429 || status >= 500))) return 'DeepSeek 这会儿忙不过来，这一回合没写成——等几秒再选一次。'
   return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * 玩家行动里的【领取】行（前端每领一组写一行：`【领取】十人斩：长柄刃器改造方案`）→ 哪一组、选了哪个候选。
+ * 组名与候选名都要和待领取的组原样对上（界面照抄，不做模糊匹配）；只写候选名也认，取最早一组含它的。
+ * 返回去掉这些行的行动原话。
+ */
+export function extractClaims(text: string, offers: readonly RewardOffer[]): { text: string; claims: { offerId: string; choice: string }[] } {
+  const lines = text.split('\n')
+  const claims: { offerId: string; choice: string }[] = []
+  const rest: string[] = []
+  for (const line of lines) {
+    const t = line.trim()
+    if (!t.startsWith('【领取】')) {
+      rest.push(line)
+      continue
+    }
+    const body = t.slice('【领取】'.length).trim()
+    const open = offers.filter(o => !claims.some(c => c.offerId === o.id))
+    const byGroup = open.find(o => [`${o.title}：`, `${o.title}:`].some(p => body.startsWith(p)) && o.choices.some(c => c.title === body.slice(o.title.length + 1).trim()))
+    if (byGroup) {
+      claims.push({ offerId: byGroup.id, choice: body.slice(byGroup.title.length + 1).trim() })
+      continue
+    }
+    const byChoice = open.find(o => o.choices.some(c => c.title === body))
+    if (byChoice) claims.push({ offerId: byChoice.id, choice: body })
+  }
+  return { text: rest.join('\n').trim(), claims }
 }
 
 /**
@@ -315,12 +345,14 @@ export class Engine {
     }
     if (phaseOf(state) === 'ended') throw new EngineError('ended', '这一局已经剧终')
     const story = state.created.story!
-    const { text: action, allocations } = extractAllocations(text, attributeDefs(story, state.progress.revisions))
+    const { text: afterPoints, allocations } = extractAllocations(text, attributeDefs(story, state.progress.revisions))
+    const { text: action, claims } = extractClaims(afterPoints, state.offers)
     const input: PlayerInputData = {
       text: action || text,
       offstage: false,
       ...state.chapters.length === 0 ? { opening: true } : {},
       ...allocations.length ? { allocations } : {},
+      ...claims.length ? { claims } : {},
     }
     this.start(sessionId, 'play', signal => this.runPlay(sessionId, input, signal))
   }
@@ -433,7 +465,7 @@ export class Engine {
     if (!log) return
     const state = this.safeState(sessionId)
     const events = this.deps.store.read(sessionId)
-    const record = inspectTurn(sessionId, lastTurnSlice(events), state?.created.story?.craft.action_options ?? 4)
+    const record = inspectTurn(sessionId, lastTurnSlice(events), state?.created.story?.craft.action_options ?? 4, echoContextOf(events))
     writeRecord(log, record)
   }
 
@@ -483,6 +515,25 @@ export class Engine {
         spent: outcome.spent,
         rejected: outcome.rejected,
       } satisfies PointsSpentData)
+      this.pushState(sessionId)
+    }
+    if (input.claims?.length) {
+      // 领取奖励：和加点一样由代码直接落账（写进日志、计数对齐），不经过模型；尾部让这一章写它到账
+      for (const claim of input.claims) {
+        state = foldSession(store.read(sessionId))
+        const offer = state.offers.find(o => o.id === claim.offerId)
+        const choice = offer?.choices.find(c => c.title === claim.choice)
+        if (!offer || !choice) continue
+        const label = story.mechanics?.rewards?.label ?? '奖励'
+        const counter = alignRewardCounter(story, state, state.offers.length - 1, `领取了${label}「${offer.title}」`)
+        this.append(sessionId, 'reward/claimed', {
+          turn,
+          offerId: offer.id,
+          offerTitle: offer.title,
+          choice,
+          ...counter ? { counter } : {},
+        } satisfies RewardClaimedData)
+      }
       this.pushState(sessionId)
     }
 

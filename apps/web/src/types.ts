@@ -172,6 +172,19 @@ export interface InventoryChange {
   reason?: string
 }
 
+/** 待玩家自己领取的奖励：一组只能选一个，随下一步行动由代码落账 */
+export interface RewardOfferSnapshot {
+  id: string
+  turn: number
+  title: string
+  choices: { title: string; detail?: string }[]
+}
+
+export interface RewardsSnapshot {
+  label: string
+  pending: RewardOfferSnapshot[]
+}
+
 /** progression projection 的载荷：等级、经验、未分配属性点 */
 export interface ProgressionSnapshot {
   label: string
@@ -314,6 +327,7 @@ export interface SessionValues {
   inventory?: InventorySnapshot | null
   progress?: ProgressSnapshot | null
   progression?: ProgressionSnapshot | null
+  rewards?: RewardsSnapshot | null
   sessionStats?: SessionStats
 }
 

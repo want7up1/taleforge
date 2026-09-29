@@ -1,7 +1,7 @@
 /**
  * 会话日志的事件类型。日志是唯一的事实来源：面板、进度、章节窗口、观测统计全部由它折叠出来。
  *
- * 游戏会话：session/created → (player/input → turn/start → [points/spent] → [check/rolled…]
+ * 游戏会话：session/created → (player/input → turn/start → [points/spent] [reward/claimed…] → [check/rolled…]
  *   → chapter → settlement → [act/advanced] [ending/declared] → turn/end)… 场外回合是
  *   player/input(offstage) → turn/start → [revision…] → reply → turn/end。recap 由后台在回合之间追加。
  * 工坊/修改对话：session/created → (player/input → turn/start → agent/message → tool/result… → turn/end)…
@@ -43,6 +43,8 @@ export interface PlayerInputData {
   opening?: boolean
   /** 玩家随这一步行动提交的加点（属性 id → 点数），由代码直接落账 */
   allocations?: { id: string; points: number }[]
+  /** 玩家随这一步行动领取的奖励（哪一组、选了哪个候选），由代码直接落账 */
+  claims?: { offerId: string; choice: string }[]
 }
 
 export interface TurnStartData {
@@ -82,6 +84,16 @@ export interface CheckData extends CheckResult {
   turn: number
 }
 
+/** 一组待玩家自己选的奖励候选（剧本声明了 mechanics.rewards 才有）：一组只能选一个。 */
+export interface RewardOffer {
+  /** 代码起的 id：r<回合>-<序号> */
+  id: string
+  turn: number
+  /** 这一组的名目（"十人斩"） */
+  title: string
+  choices: { title: string; detail?: string }[]
+}
+
 export interface SettlementReceipt {
   anchors: { accepted: string[]; ignored: { id: string; reason: string }[] }
   upkeep: AppliedChange[]
@@ -90,6 +102,10 @@ export interface SettlementReceipt {
   inventory: AppliedInventoryChange[]
   xp?: XpResult & { unspent: number }
   options: string[]
+  /** 这一章新给出的奖励候选组（玩家之后在界面上选） */
+  offers?: RewardOffer[]
+  /** 奖励计数资源被代码对齐到"待领取组数"的那一笔（剧本声明了 rewards.counter 才有） */
+  counter?: AppliedChange
   /** 裁决时被丢掉的条目（未知 id、非法值……），给观测与排查用 */
   rejected: string[]
   advancedTo?: number
@@ -116,6 +132,16 @@ export interface PointsSpentData {
   changes: AppliedChange[]
   spent: number
   rejected: { id: string; points: number; reason: string }[]
+}
+
+/** 玩家领取了一组奖励里的一个候选（随行动提交，代码落账；没选的候选作废）。 */
+export interface RewardClaimedData {
+  turn: number
+  offerId: string
+  offerTitle: string
+  choice: { title: string; detail?: string }
+  /** 奖励计数资源随之对齐的那一笔 */
+  counter?: AppliedChange
 }
 
 export interface RevisionData {

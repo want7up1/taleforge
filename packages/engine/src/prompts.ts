@@ -12,7 +12,7 @@
  * 结算步的指令（settlementBrief）也在这里——机制细则只写在结算步，写正文那一步不背清单。
  */
 import type { AppliedChange } from '@taleforge/mechanics'
-import { levelLabel } from '@taleforge/mechanics'
+import { dueUpkeep, levelLabel } from '@taleforge/mechanics'
 import { pressureOf, remainingAnchors, revisionLines } from '@taleforge/progress'
 import { interleavedWords, type Lexicon, type LoreEntry, type Story } from '@taleforge/scenario-compiler'
 import { driftNotes, freshWords, markersOf, type TurnFact } from './drift.ts'
@@ -128,6 +128,10 @@ export function panelLines(state: SessionState, story: Story): string[] {
     const items = Object.values(state.inventory)
     lines.push(`物品栏：${items.length ? items.map(i => (i.qty > 1 ? `${i.name}×${i.qty}` : i.name)).join('、') : '（空）'}`)
   }
+  const rewards = story.mechanics?.rewards
+  if (rewards && state.offers.length) {
+    lines.push(`待领取的${rewards.label}：${state.offers.map(o => `「${o.title}」`).join('')}（玩家在界面上自己选，你不替他选）`)
+  }
   return lines
 }
 
@@ -164,6 +168,14 @@ function carryOverLines(state: SessionState, story: Story): string[] {
     lines.push(`【升级】上一章结束时升到 ${lv(xp.levelAfter)}（${lv(xp.levelBefore)} → ${lv(xp.levelAfter)}，属性点由玩家自己分配）——这一章把升级写成可感的瞬间（怎么写按剧本规则）${story.craft.numbers_in_prose ? '' : '，不出现数字'}。`)
   }
   return lines
+}
+
+/** 本回合玩家领了哪些奖励：这一章写它到账（和加点一样，选择已由代码落账）。 */
+function claimsLine(state: SessionState, story: Story): string | undefined {
+  if (!state.lastClaims.length || !story.mechanics?.rewards) return undefined
+  const label = story.mechanics.rewards.label
+  const picks = state.lastClaims.map(c => `「${c.offerTitle}」选了「${c.choice.title}」${c.choice.detail ? `（${c.choice.detail}）` : ''}`).join('；')
+  return `【领取】玩家刚领了${label}：${picks}——这一章写出它到账的那一下，没选的候选当场作废。它带来的东西结算时照剧本规则记。`
 }
 
 function pointsLine(state: SessionState, story: Story): string | undefined {
@@ -227,6 +239,8 @@ export function renderPlayTail({ state, story, input, opening, lexicons = [] }: 
   if (phaseOf(state) === 'finale') lines.push(FINALE_BRIEF)
   const points = pointsLine(state, story)
   if (points) lines.push(points)
+  const claims = claimsLine(state, story)
+  if (claims) lines.push(claims)
   if (!opening) lines.push(`【玩家本回合】${input}`)
   lines.push(CHAPTER_BRIEF)
   return lines.join('\n')
@@ -304,17 +318,16 @@ export function settlementBrief(state: SessionState, story: Story, options: { fi
       : 'anchors：当前幕没有待达成的锚点，传空数组。')
   }
 
-  const upkeep = mech?.upkeep ?? []
   if (mech?.resources?.length) {
     const met = metCast(state, story)
     const all = resourceDefs(story, revisions)
     const defs = all.filter(d => revealed(d, met))
     const pending = all.length - defs.length
     sections.push(`resources（资源）：这一章的事件落进了下面哪条说明，就记哪条——判断标准是"事件类型对不对得上"，不是"变化够不够大"：一次遭遇战、一次并肩逃生、一夜休整都要记。没有变化传空数组。增减多少你按剧情定，系统会裁掉越界的部分。\n${defs
-      .map(d => `- ${d.id}（${d.label}，当前 ${state.values[d.id]?.value ?? d.initial}，${d.min}–${d.max}，单次最多 ±${d.maxStep}${d.display === 'hidden' ? '，玩家看不见但照样记账' : ''}）：${d.guidance}`)
-      .join('\n')}${upkeep.length
-      ? `\n周期收支已由系统自动结算（${upkeep.map(u => `${u.reason}：${defs.find(d => d.id === u.id)?.label ?? u.id} ${u.delta > 0 ? '+' : ''}${u.delta}`).join('；')}），不要重复记。`
-      : ''}${pending > 0 ? `\n另有 ${pending} 条绑定在还没登场的人物身上，人物登场之前不记。` : ''}`)
+      .map(d => d.id === mech.rewards?.counter
+        ? `- ${d.id}（${d.label}，当前 ${state.values[d.id]?.value ?? d.initial}）：由系统按待领取的${mech.rewards.label}自动对齐，不要记。`
+        : `- ${d.id}（${d.label}，当前 ${state.values[d.id]?.value ?? d.initial}，${d.min}–${d.max}，单次最多 ±${d.maxStep}${d.display === 'hidden' ? '，玩家看不见但照样记账' : ''}）：${d.guidance}`)
+      .join('\n')}${upkeepNote(state, story, defs)}${pending > 0 ? `\n另有 ${pending} 条绑定在还没登场的人物身上，人物登场之前不记。` : ''}`)
   }
 
   if (mech?.attributes?.length) {
@@ -334,6 +347,17 @@ export function settlementBrief(state: SessionState, story: Story, options: { fi
     sections.push(`xp（${p.label}）：${p.guidance}\n这一章换来多少就报多少（负数为失去），没有传 0；单次最多 ${p.maxStep}。等级与属性点由系统按阈值裁定，属性点由玩家自己分配——你不替玩家加点。${p.bonusPointsMax > 0 ? `剧本规则写明的剧情奖励属性点用 points 发放（单次最多 ${p.bonusPointsMax}），同样进玩家的待分配池。` : ''}`)
   }
 
+  const rewards = mech?.rewards
+  if (rewards) {
+    const claimed = state.lastClaims
+    sections.push([
+      `offers（${rewards.label}候选）：这一章正文里系统给出了一组可选的${rewards.label}吗？判断标准是正文里有没有列出候选。`,
+      '列出了就把这一组记下来：名目，加上每个候选的名称和一句说明，照正文原样；一组只能选一个，由玩家在界面上选——你不替玩家选，这一次也不落账候选的内容。没有就传空数组。',
+      state.offers.length ? `还没领的：${state.offers.map(o => `「${o.title}」`).join('')}——不要重复记。` : '',
+      claimed.length ? `\n这一回合玩家领了：${claimed.map(c => `「${c.offerTitle}」选了「${c.choice.title}」${c.choice.detail ? `（${c.choice.detail}）` : ''}`).join('；')}——它带来的东西（物品、数值、剧情属性点……）照剧本规则在这次结算里记。` : '',
+    ].join(''))
+  }
+
   if (!options.finale) {
     const n = story.craft.action_options
     const pressure = act ? pressureOf(state.progress, act.pace) : undefined
@@ -342,9 +366,12 @@ export function settlementBrief(state: SessionState, story: Story, options: { fi
       `options（给玩家的 ${n} 个下一步行动）：每条是玩家此刻可以立刻去做的具体行动——谁、做什么、对谁或往哪，一句话；不写"继续""看看情况"这类空话，不带编号。`,
       '从这一章的结尾往下走：结尾刚出现的东西（一个声音、一个人、一处变化）至少有一条选项直接回应它。',
       `第一条推动当前幕目标${pressure?.level === 'high' && next ? `，直指「${next.text}」` : ''}；其余给出不同的策略、风险或信息方向。`,
-      repeatGuard(state),
       phaseOf(state) === 'finale' ? '主线已经全部达成：这是走向结局前的最后一步。' : '',
     ].join(''))
+    // 不原地打转单独成段、放在整份结算指令的最后：离生成选项最近（2026-09-29 夹在选项段中间时，
+    // 上一回合没选的选项仍被几乎原样再给了一遍，相似度 0.86）
+    const guard = repeatGuard(state)
+    if (guard) sections.push(guard)
   }
   return sections.join('\n\n')
 }
@@ -369,7 +396,25 @@ function repeatGuard(state: SessionState): string {
     taken ? `玩家这一步刚做的是「${clip(taken)}」` : '',
     offered.length ? `上一回合给过的是${offered.map(o => `「${clip(o)}」`).join('')}` : '',
   ].filter(Boolean)
-  return `不原地打转：${parts.join('；')}——不要把它们换个说法再给一遍。刚做的事没做完、还要接着做，就写清接着做的是哪一个新的动作（同一件事换个说法、换个角度都不算新动作）。`
+  return `不原地打转：${parts.join('；')}——不要把它们换个说法再给一遍（剧本规则要求常驻的选项除外）。刚做的事没做完、还要接着做，就写清接着做的是哪一个新的动作（同一件事换个说法、换个角度都不算新动作）。`
+}
+
+/**
+ * 周期收支这一回合会不会滚：按结算前的值现算，只说真会发生的。
+ * 实测（2026-09-29 线上）：旧写法不管生不生效都说"已由系统自动结算：田里的苗 +1"，还没播种（值为 0、
+ * 没过门槛）GM 就照着报了 +1，把苗推到 1，此后系统每回合真的替它长——"没种田，苗一直在长"。
+ */
+function upkeepNote(state: SessionState, story: Story, defs: readonly { id: string; label: string }[]): string {
+  const upkeep = story.mechanics?.upkeep ?? []
+  if (!upkeep.length) return ''
+  const due = new Set(dueUpkeep(state.values, upkeep))
+  const label = (id: string) => defs.find(d => d.id === id)?.label ?? id
+  const on = upkeep.filter(u => due.has(u))
+  const off = upkeep.filter(u => !due.has(u))
+  return [
+    on.length ? `\n周期收支这一回合由系统自动结算（${on.map(u => `${u.reason}：${label(u.id)} ${u.delta > 0 ? '+' : ''}${u.delta}`).join('；')}），不要重复记。` : '',
+    off.length ? `\n${off.map(u => `${label(u.id)}当前 ${state.values[u.id]?.value ?? 0}，要高于 ${u.activeAbove} 才会自动变化`).join('；')}——这一回合系统不动它们；正文里真的发生了对应的事（比如播种），才按它们的说明记。` : '',
+  ].join('')
 }
 
 // ---- 前情提要 ----

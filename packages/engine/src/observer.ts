@@ -21,8 +21,47 @@ export interface TurnRecord {
   info: Record<string, unknown>
 }
 
+/**
+ * 两句话有多像：去掉选项字母与标点后按相邻两字切片，重合的片数 ÷ 较短一句的片数（0 = 无关，1 = 一样）。
+ * 只用来观测选项有没有原地打转（2026-09-29 线上：同一个选项换个说法反复出现），不参与任何裁决。
+ */
+export function optionEcho(a: string, b: string): number {
+  const grams = (t: string) => {
+    const chars = [...t.replace(/^[A-E][.．、]\s*/, '').replace(/[\s，。、；：:,.;!?！？「」“”"'（）()—…-]/g, '')]
+    const set = new Set<string>()
+    for (let i = 0; i < chars.length - 1; i++) set.add(chars[i] + chars[i + 1])
+    return set
+  }
+  const x = grams(a)
+  const y = grams(b)
+  if (!x.size || !y.size) return 0
+  let shared = 0
+  for (const g of x) if (y.has(g)) shared++
+  return Math.round((shared / Math.min(x.size, y.size)) * 100) / 100
+}
+
+/** 观测选项原地打转要用的上下文：这一回合玩家的行动原话、上一回合给过的选项。 */
+export interface EchoContext {
+  input?: string
+  previousOptions?: readonly string[]
+}
+
+/** 从整份日志里取出最后一个回合的 EchoContext（观测用；lastTurnSlice 切掉的正是这两样）。 */
+export function echoContextOf(events: readonly StoredEvent[]): EchoContext {
+  const start = events.findLastIndex(e => e.type === 'turn/start')
+  if (start < 0) return {}
+  const turn = (events[start].data as unknown as TurnStartData).turn
+  const before = events.slice(0, start)
+  const input = before.findLast(e => e.type === 'player/input')?.data as { text?: string } | undefined
+  const prev = before.findLast(e => e.type === 'settlement')?.data as unknown as SettlementData | undefined
+  return {
+    ...input?.text ? { input: input.text } : {},
+    ...prev && prev.turn === turn - 1 ? { previousOptions: prev.receipt.options } : {},
+  }
+}
+
 /** 一个回合（turn/start..turn/end）的结构检查。纯函数，可离线跑历史存档。 */
-export function inspectTurn(sessionId: string, events: readonly StoredEvent[], expectedOptions = 4): TurnRecord {
+export function inspectTurn(sessionId: string, events: readonly StoredEvent[], expectedOptions = 4, echo: EchoContext = {}): TurnRecord {
   const start = events.find(e => e.type === 'turn/start')?.data as unknown as TurnStartData | undefined
   const end = events.find(e => e.type === 'turn/end')?.data as unknown as TurnEndData | undefined
   const record: TurnRecord = {
@@ -82,6 +121,15 @@ export function inspectTurn(sessionId: string, events: readonly StoredEvent[], e
           if (settlement.receipt.rejected.length) record.info.rejected = settlement.receipt.rejected
           if (settlement.receipt.advancedTo !== undefined) record.info.advancedTo = settlement.receipt.advancedTo
           if (settlement.receipt.ended) record.info.finale = true
+          // 选项原地打转：与玩家刚做的事、与上一回合的选项最像的一条有多像（先攒数据，暂不算违规）
+          const options = settlement.receipt.options
+          const input = echo.input?.trim()
+          if (options.length && input && !/^（[^）]*）$/.test(input)) {
+            record.info.echoInput = Math.max(...options.map(o => optionEcho(o, input)))
+          }
+          if (options.length && echo.previousOptions?.length) {
+            record.info.echoPrev = Math.max(...options.flatMap(o => echo.previousOptions!.map(p => optionEcho(o, p))))
+          }
         }
       }
     }

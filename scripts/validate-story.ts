@@ -43,6 +43,7 @@ if (s.mechanics) {
     m.checks && `判定(${m.checks.die})`,
     m.inventory && `物品栏(初始×${m.inventory.initial.length})`,
     m.progression && `经验等级(满级 ${m.progression.thresholds.length + 1}，每级 ${m.progression.pointsPerLevel} 点)`,
+    m.rewards && `奖励领取(${m.rewards.label}${m.rewards.counter ? `，计数 ${m.rewards.counter}` : ''})`,
   ].filter(Boolean).join('、')}`)
 }
 const extras = [

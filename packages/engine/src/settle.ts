@@ -22,7 +22,7 @@ import {
 } from '@taleforge/mechanics'
 import { applyReport } from '@taleforge/progress'
 import type { Story } from '@taleforge/scenario-compiler'
-import type { SettlementReceipt } from './events.ts'
+import type { RewardOffer, SettlementReceipt } from './events.ts'
 import { actsOf, attributeDefs, resourceDefs, type SessionState } from './fold.ts'
 
 export const SETTLE_TOOL = 'settle_turn'
@@ -89,6 +89,35 @@ export function settleToolDef(story: Story, state: SessionState): ToolDef {
       additionalProperties: false,
     }
   }
+  const rewards = story.mechanics?.rewards
+  if (rewards) {
+    properties.offers = {
+      type: 'array',
+      description: `这一章正文里系统给出的${rewards.label}候选组（玩家之后在界面上自己选一个）；没有传空数组`,
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '这一组的名目（比如完成了哪个任务）' },
+          choices: {
+            type: 'array',
+            minItems: 2,
+            maxItems: 6,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: '候选的名称，照正文原样' },
+                detail: { type: 'string', description: '一句说明：选了它会得到什么' },
+              },
+              required: ['title', 'detail'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['title', 'choices'],
+        additionalProperties: false,
+      },
+    }
+  }
   const n = story.craft.action_options
   properties.options = {
     type: 'array',
@@ -120,6 +149,22 @@ const changesOf = (raw: unknown): ResourceChange[] =>
       ? [{ id: c.id, delta, reason: typeof c.reason === 'string' ? c.reason : '' }]
       : []
   })
+
+const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '')
+
+/**
+ * 奖励计数对齐到"待领取的组数"：由代码直接写值（不走单步上限——它不是剧情里涨落的量，是一个计数）。
+ * 剧本没声明 rewards.counter、或值已经对齐时返回 undefined。
+ */
+export function alignRewardCounter(story: Story, state: Pick<SessionState, 'values' | 'progress'>, pending: number, reason: string): SettlementReceipt['counter'] {
+  const id = story.mechanics?.rewards?.counter
+  const def = id ? resourceDefs(story, state.progress.revisions).find(d => d.id === id) : undefined
+  if (!id || !def) return undefined
+  const before = state.values[id]?.value ?? def.initial
+  const after = Math.max(def.min, Math.min(def.max, pending))
+  if (after === before) return undefined
+  return { id, delta: pending - before, reason, applied: after - before, before, after, clamped: after !== pending }
+}
 
 /** 选项：去编号、去空、去重，截到剧本声明的个数。 */
 export function cleanOptions(raw: unknown, max: number): string[] {
@@ -156,9 +201,15 @@ export function adjudicate(story: Story, state: SessionState, args: unknown): Se
     values = r.state
     upkeep = r.applied
   }
+  const rewards = story.mechanics?.rewards
   let resources: AppliedChange[] = []
   if (rDefs.length) {
-    const proposed = changesOf(a.resources)
+    let proposed = changesOf(a.resources)
+    // 奖励计数归代码：GM 报的一律不收（线上实测它会在"发布任务"时记、在"完成任务"时漏记）
+    if (rewards?.counter && proposed.some(c => c.id === rewards.counter)) {
+      proposed = proposed.filter(c => c.id !== rewards.counter)
+      rejected.push(`「${rDefs.find(d => d.id === rewards.counter)?.label ?? rewards.counter}」由系统按待领取的${rewards.label}自动对齐，结算里不用记`)
+    }
     const r = applyChanges(values, rDefs, proposed)
     values = r.state
     resources = r.applied
@@ -211,6 +262,35 @@ export function adjudicate(story: Story, state: SessionState, args: unknown): Se
     }
   }
 
+  const offers: RewardOffer[] = []
+  if (rewards) {
+    const pendingTitles = new Set(state.offers.map(o => o.title))
+    for (const o of asArray(a.offers)) {
+      const title = text(o.title, 30)
+      const seen = new Set<string>()
+      const choices = asArray(o.choices).flatMap((c) => {
+        const t = text(c.title, 30)
+        if (!t || seen.has(t)) return []
+        seen.add(t)
+        const detail = text(c.detail, 120)
+        return [detail ? { title: t, detail } : { title: t }]
+      }).slice(0, 6)
+      if (!title || choices.length < 2) {
+        rejected.push(`${rewards.label}候选组不完整（要有名目和至少两个候选）：${title || '（没写名目）'}`)
+        continue
+      }
+      if (pendingTitles.has(title)) {
+        rejected.push(`重复记了还没领的${rewards.label}「${title}」`)
+        continue
+      }
+      pendingTitles.add(title)
+      offers.push({ id: `r${state.progress.turn}-${offers.length + 1}`, turn: state.progress.turn, title, choices })
+    }
+  }
+  const counter = rewards
+    ? alignRewardCounter(story, { values, progress: state.progress }, state.offers.length + offers.length, `待领取的${rewards.label}：${state.offers.length + offers.length} 组`)
+    : undefined
+
   const acts = actsOf(story, revisions)
   const proposedAnchors = Array.isArray(a.anchors) ? a.anchors.filter((x): x is string => typeof x === 'string') : []
   const report = applyReport(state.progress, acts, proposedAnchors)
@@ -226,6 +306,8 @@ export function adjudicate(story: Story, state: SessionState, args: unknown): Se
     ended: report.ended,
   }
   if (xp) receipt.xp = xp
+  if (offers.length) receipt.offers = offers
+  if (counter) receipt.counter = counter
   if (report.advancedTo !== undefined) receipt.advancedTo = report.advancedTo
   return receipt
 }

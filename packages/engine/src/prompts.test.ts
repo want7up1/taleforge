@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { lexiconSchema, storySchema } from '@taleforge/scenario-compiler'
 import type { StoredEvent } from '@taleforge/store'
 import { foldSession } from './fold.ts'
-import { inspectTurn } from './observer.ts'
+import { echoContextOf, inspectTurn, optionEcho } from './observer.ts'
 import {
   CHAPTER_BRIEF,
   hotStory,
@@ -99,7 +99,7 @@ test('结算指令：机制细则全在这里——完成信号、guidance、隐
   assert.match(brief, /find-key：找到旧钥匙（可选）/)
   assert.match(brief, /stamina（体力，当前 50，0–100，单次最多 ±20）：奔跑 -10，休息 \+20/)
   assert.match(brief, /doom（倒计时.*玩家看不见但照样记账/)
-  assert.match(brief, /周期收支已由系统自动结算（每日口粮：口粮 -1），不要重复记/)
+  assert.match(brief, /周期收支这一回合由系统自动结算（每日口粮：口粮 -1），不要重复记/)
   assert.match(brief, /现有物品：letter（无名信）/)
   assert.match(brief, /xp（经验）：推进主线 \+20/)
   assert.match(brief, /options（给玩家的 4 个下一步行动）/)
@@ -222,4 +222,43 @@ test('选项不原地打转：结算指令原样摆出玩家刚做的事和上�
   assert.match(brief, /玩家这一步刚做的是「逼她把昨天看到的说清楚」/, '选项字母去掉')
   assert.match(brief, /上一回合给过的是「逼她把昨天看到的说清楚」「退到铁门边守住退路」——不要把它们换个说法再给一遍/)
   assert.match(brief, /同一件事换个说法、换个角度都不算新动作/)
+  assert.match(brief.split('\n\n').at(-1)!, /^不原地打转：/, '单独成段，放在整份结算指令最后——离生成选项最近')
+})
+
+test('观测选项原地打转：记下与玩家刚做的事、与上一回合选项最像的一条有多像（只记数，不算违规）', () => {
+  assert.equal(optionEcho('A. 逼她把昨天看到的说清楚', '逼她把昨天看到的说清楚'), 1, '选项字母与标点不算')
+  assert.equal(optionEcho('退到铁门边守住退路', '撬开后厨储藏室找水'), 0)
+  assert.ok(optionEcho('把潘雅挪到墙角阴影里，用打火机点着烂白菜', '把潘雅连人带方管挪到墙角阴影里，用她说的打火机点那堆烂白菜') > 0.6)
+  const receipt = (options: string[]) => ({ anchors: { accepted: [], ignored: [] }, upkeep: [], resources: [], attributes: [], inventory: [], options, rejected: [], ended: false })
+  const log = [
+    ev('player/input', { text: '（开始）' }),
+    ev('turn/start', { kind: 'play', turn: 1 }),
+    ev('chapter', { turn: 1, text: '一', toolRoundsBeforeText: 0, steps: [] }),
+    ev('settlement', { turn: 1, receipt: receipt(['逼她把昨天看到的说清楚', '退到铁门边守住退路']) }),
+    ev('turn/end', { kind: 'play', turn: 1, reason: 'completed' }),
+    ev('player/input', { text: 'A. 逼她把昨天看到的说清楚' }),
+    ev('turn/start', { kind: 'play', turn: 2 }),
+    ev('chapter', { turn: 2, text: '二', toolRoundsBeforeText: 0, steps: [] }),
+    ev('settlement', { turn: 2, receipt: receipt(['把昨天看到的一句句逼她说清楚', '退到铁门边守住退路', '撬开后厨找水', '下到二楼探路']) }),
+    ev('turn/end', { kind: 'play', turn: 2, reason: 'completed' }),
+  ]
+  assert.deepEqual(echoContextOf(log), { input: 'A. 逼她把昨天看到的说清楚', previousOptions: ['逼她把昨天看到的说清楚', '退到铁门边守住退路'] })
+  const record = inspectTurn('s', log.slice(6), 4, echoContextOf(log))
+  assert.ok((record.info.echoInput as number) > 0.6, '第一条是刚做过的事换了个说法')
+  assert.equal(record.info.echoPrev, 1, '第二条原样照搬上一回合')
+  assert.deepEqual(record.violations, [], '先攒数据，不算违规')
+  const opening = inspectTurn('s', log.slice(1, 5), 4, echoContextOf(log.slice(0, 5)))
+  assert.equal(opening.info.echoInput, undefined, '（开始）不是玩家的行动')
+  assert.equal(opening.info.echoPrev, undefined)
+})
+
+test('周期收支只说这一回合真会发生的：没过门槛的写明"系统不动它，正文里真的播种了才记"', () => {
+  const input = structuredClone(testStoryInput) as Record<string, any>
+  input.mechanics.resources.push({ id: 'crop', label: '田里的苗', group: 'world', min: 0, max: 3, initial: 0, maxStep: 3, guidance: '播种时设为 1' })
+  input.mechanics.upkeep.push({ id: 'crop', delta: 1, reason: '苗又长了一节', activeAbove: 0 })
+  const story = storySchema.parse(input)
+  const brief = settlementBrief(stateAfter(), story, { finale: false })
+  assert.match(brief, /周期收支这一回合由系统自动结算（每日口粮：口粮 -1），不要重复记/)
+  assert.doesNotMatch(brief, /苗又长了一节：田里的苗 \+1/, '没过门槛就不说"已自动结算"')
+  assert.match(brief, /田里的苗当前 0，要高于 0 才会自动变化——这一回合系统不动它们；正文里真的发生了对应的事（比如播种），才按它们的说明记/)
 })

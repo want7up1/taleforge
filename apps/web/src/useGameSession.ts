@@ -17,6 +17,7 @@ import type {
   InventorySnapshot,
   MechanicsSnapshot,
   ProgressionSnapshot,
+  RewardsSnapshot,
   ProgressSnapshot,
   SessionStats,
   SessionValues,
@@ -29,6 +30,7 @@ export interface Panels {
   inventory?: InventorySnapshot
   progress?: ProgressSnapshot
   progression?: ProgressionSnapshot
+  rewards?: RewardsSnapshot
   stats?: SessionStats
 }
 
@@ -94,6 +96,7 @@ export function useGameSession(sessionId: string) {
         inventory: values.inventory ?? prev.inventory,
         progress: values.progress ?? prev.progress,
         progression: values.progression ?? prev.progression,
+        rewards: values.rewards ?? prev.rewards,
         stats: values.sessionStats ?? prev.stats,
       }))
     }

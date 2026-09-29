@@ -5,7 +5,7 @@
 import { progressionView, type ProgressionView, type ResourceDef, type ResourceState } from '@taleforge/mechanics'
 import { pressureOf, type ProgressView } from '@taleforge/progress'
 import { actsOf, attributeDefs, phaseOf, resourceDefs, type SessionState, type SessionStats } from './fold.ts'
-import type { ModelChoice, SessionKind } from './events.ts'
+import type { ModelChoice, RewardOffer, SessionKind } from './events.ts'
 
 export interface SessionView {
   kind: SessionKind
@@ -17,6 +17,8 @@ export interface SessionView {
   inventory: { items: { id: string; name: string; qty: number; note?: string }[] } | null
   progress: ProgressView | null
   progression: ProgressionView | null
+  /** 待玩家自己领取的奖励（剧本声明了 mechanics.rewards 才有） */
+  rewards: { label: string; pending: RewardOffer[] } | null
   sessionStats: SessionStats
 }
 
@@ -58,6 +60,7 @@ export function sessionView(state: SessionState): SessionView {
         }
       : null,
     progression: mech?.progression ? progressionView(mech.progression, state.progression) : null,
+    rewards: mech?.rewards ? { label: mech.rewards.label, pending: state.offers } : null,
     sessionStats: state.stats,
   }
 }

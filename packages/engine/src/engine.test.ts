@@ -4,8 +4,9 @@ import path from 'node:path'
 import { test } from 'node:test'
 import type { ChatMessage } from '@taleforge/llm'
 import { lexiconSchema, storySchema } from '@taleforge/scenario-compiler'
-import { EngineError, extractAllocations, publicEvent, type Frame } from './engine.ts'
-import type { ChapterData, SettlementData } from './events.ts'
+import { EngineError, extractAllocations, extractClaims, publicEvent, type Frame } from './engine.ts'
+import type { ChapterData, PlayerInputData, RewardClaimedData, RewardOffer, SettlementData } from './events.ts'
+import { foldSession } from './fold.ts'
 import { FakeLlm, makeEngine, settleCall, testStory, testStoryInput, toolCall, turn } from './testkit.ts'
 
 const types = (events: { type: string }[]) => events.map(e => e.type)
@@ -400,4 +401,63 @@ test('词库：剧本声明了才进固定前缀，正文、结算、场外同�
   const other = plain.engine.createGame(testStory())
   await turn(plain.engine, other, '（开始）')
   assert.doesNotMatch(plain.llm.calls[0].request.messages[0].content as string, /用词库/, '剧本没声明就没有（无隐藏默认）')
+})
+
+const rewardStory = () => {
+  const input = structuredClone(testStoryInput) as Record<string, any>
+  input.mechanics.resources.push({ id: 'tokens', label: '未决神选', group: 'self', min: 0, max: 6, initial: 0, maxStep: 2, guidance: '任务完成 +1' })
+  input.mechanics.rewards = { label: '神级选择', guidance: '任务完成时给资源、技术、个人成长三个方向的候选各一项。', counter: 'tokens' }
+  return storySchema.parse(input)
+}
+const tenKills = { title: '十人斩', choices: [{ title: '压缩口粮', detail: '三日份' }, { title: '长柄刃器', detail: '改造图纸' }, { title: '属性点', detail: '+1' }] }
+
+test('奖励领取：结算记下候选组、计数由代码对齐（GM 报的不收）；玩家选的【领取】行随下一步由代码落账，下一章与结算都知道', async () => {
+  const story = rewardStory()
+  const llm = new FakeLlm()
+  llm.queues.settle.push({ toolCalls: [settleCall({
+    options: ['A', 'B', 'C', 'D'],
+    resources: [{ id: 'tokens', delta: 1, reason: '任务完成' }],
+    offers: [tenKills, { title: '不完整', choices: [{ title: '只有一个', detail: 'x' }] }],
+  })] })
+  const { engine, store } = makeEngine({ llm, story })
+  const id = engine.createGame(story)
+  await turn(engine, id, '（开始）')
+  assert.match(String(llm.calls.find(c => c.kind === 'prose')!.request.messages[0].content), /## 神级选择（玩家自己选）/, '正文步知道候选要写清、不替玩家选')
+  const first = (store.read(id).find(e => e.type === 'settlement')!.data as unknown as SettlementData).receipt
+  assert.ok(first.rejected.some(r => r.includes('由系统按待领取的神级选择自动对齐')), 'GM 报的计数不收')
+  assert.ok(first.rejected.some(r => r.includes('候选组不完整')))
+  let st = foldSession(store.read(id))
+  assert.deepEqual(st.offers.map(o => o.title), ['十人斩'])
+  assert.equal(st.values.tokens.value, 1, '计数 = 待领取组数')
+
+  await turn(engine, id, 'A. 往北走\n【领取】十人斩：长柄刃器')
+  const events = store.read(id)
+  const claimed = events.find(e => e.type === 'reward/claimed')!.data as unknown as RewardClaimedData
+  assert.deepEqual(claimed.choice, { title: '长柄刃器', detail: '改造图纸' })
+  assert.equal((events.filter(e => e.type === 'player/input').at(-1)!.data as unknown as PlayerInputData).text, 'A. 往北走', '【领取】行不算玩家的行动原话')
+  st = foldSession(events)
+  assert.equal(st.offers.length, 0)
+  assert.equal(st.values.tokens.value, 0, '领了一组，计数跟着对齐')
+  assert.match(userOf(llm.calls.filter(c => c.kind === 'prose').at(-1)!.request.messages), /【领取】玩家刚领了神级选择：「十人斩」选了「长柄刃器」（改造图纸）/)
+  assert.match(userOf(llm.calls.filter(c => c.kind === 'settle').at(-1)!.request.messages), /这一回合玩家领了：「十人斩」选了「长柄刃器」/)
+})
+
+test('奖励领取：同名的待领取组不重复记；【领取】行按原文对上，只写候选名也认，对不上的忽略', async () => {
+  const story = rewardStory()
+  const llm = new FakeLlm()
+  llm.queues.settle.push({ toolCalls: [settleCall({ options: ['A'], offers: [tenKills] })] })
+  llm.queues.settle.push({ toolCalls: [settleCall({ options: ['A'], offers: [tenKills, { title: '救下许晴', choices: [{ title: '药箱', detail: '' }, { title: '属性点', detail: '+1' }] }] })] })
+  const { engine, store } = makeEngine({ llm, story })
+  const id = engine.createGame(story)
+  await turn(engine, id, '（开始）')
+  await turn(engine, id, 'A. 走')
+  const second = (store.read(id).filter(e => e.type === 'settlement').at(-1)!.data as unknown as SettlementData).receipt
+  assert.ok(second.rejected.some(r => r.includes('重复记了还没领的神级选择「十人斩」')))
+  assert.deepEqual(foldSession(store.read(id)).offers.map(o => o.title), ['十人斩', '救下许晴'])
+  assert.equal(foldSession(store.read(id)).values.tokens.value, 2)
+
+  const offers: RewardOffer[] = foldSession(store.read(id)).offers
+  const parsed = extractClaims('B. 守夜\n【领取】属性点\n【领取】救下许晴：属性点\n【领取】不存在的东西', offers)
+  assert.equal(parsed.text, 'B. 守夜')
+  assert.deepEqual(parsed.claims, [{ offerId: offers[0].id, choice: '属性点' }, { offerId: offers[1].id, choice: '属性点' }], '只写候选名取最早一组；同名候选靠"组名："分开')
 })

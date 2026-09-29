@@ -416,3 +416,16 @@ test('v1.1 新字段进固定前缀：口吻样例带"不照抄"、开场章与�
   assert.match(persona, /# 文风范本[\s\S]*雨下了一整夜[\s\S]*风从北边来/)
   assert.doesNotMatch(renderPersona(storySchema.parse(story)), /# 文风范本/, '没声明就不出现')
 })
+
+test('奖励领取：rewards.counter 必须是已声明的资源；label 缺省"奖励"', () => {
+  const withRewards = (rewards: unknown) => storySchema.safeParse({
+    ...story,
+    mechanics: { resources: [{ id: 'tokens', label: '未决', group: 'self', min: 0, max: 5, initial: 0, maxStep: 1, guidance: 'x' }], rewards },
+  })
+  const ok = withRewards({ guidance: '任务完成给三选一', counter: 'tokens' })
+  assert.ok(ok.success)
+  assert.equal(ok.data!.mechanics!.rewards!.label, '奖励')
+  const bad = withRewards({ guidance: 'x', counter: 'nope' })
+  assert.equal(bad.success, false)
+  assert.match(bad.error!.issues[0].message, /未声明的资源「nope」/)
+})
