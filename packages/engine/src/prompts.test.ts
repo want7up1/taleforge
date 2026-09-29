@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { storySchema } from '@taleforge/scenario-compiler'
+import { lexiconSchema, storySchema } from '@taleforge/scenario-compiler'
 import type { StoredEvent } from '@taleforge/store'
 import { foldSession } from './fold.ts'
 import { inspectTurn } from './observer.ts'
@@ -88,6 +88,8 @@ test('热字段：重新发布后提醒、词表、分幕提醒、设定条目�
   assert.equal(hot.acts[0].reminder, '第一幕新提醒')
   assert.deepEqual(hot.lore, [])
   assert.equal(hot.title, '测试镇', '非热字段不动')
+  ;(input.craft as Record<string, unknown>).lexicons = ['harbor-talk']
+  assert.deepEqual(hotStory(snapshot, storySchema.parse(input)).craft.lexicons, ['harbor-talk'], '选用的词库也是热字段')
   assert.equal(hotStory(snapshot, undefined), snapshot)
 })
 
@@ -184,4 +186,22 @@ test('旧剧本里写着 grant_xp、adjust_resources、"回执会告诉你"：�
   const story = storySchema.parse(input)
   const brief = settlementBrief(foldSession([ev('session/created', { kind: 'game', title: 'x', model: { model: 'm', effort: 'high' }, story, storyId: story.id })]), story, { finale: false })
   assert.match(brief, /旧版的工具名[\s\S]*xp\.points/)
+})
+
+test('词库：强度提醒触发时，从选用的词库里挑最近几章没出现过的词附在后面', () => {
+  const lexicon = lexiconSchema.parse({
+    format: 'taleforge.lexicon.v1',
+    id: 'rain',
+    title: '雨',
+    groups: [{ label: '雨', words: ['檐溜', '雨脚', '水汽'] }],
+  })
+  const chapter = (turn: number, text: string) => [ev('turn/start', { kind: 'play', turn }), ev('chapter', { turn, text, toolRoundsBeforeText: 0, steps: [] })]
+  const bland = stateAfter(...chapter(1, '**甲**与**乙**，雨脚很密'), ...chapter(2, '**甲**与**乙**'), ...chapter(3, '**甲**与**乙**'))
+  const tail = renderPlayTail({ state: bland, story: testStory(), input: 'x', opening: false, lexicons: [lexicon] })
+  const line = tail.split('\n').find(l => l.startsWith('【强度】'))!
+  assert.match(line, /词库里这几章没用过的：/)
+  assert.match(line, /檐溜/)
+  assert.doesNotMatch(line, /雨脚/, '最近几章用过的不再推')
+  const none = renderPlayTail({ state: bland, story: testStory(), input: 'x', opening: false })
+  assert.doesNotMatch(none, /词库里/, '没选词库就只有事实本身')
 })

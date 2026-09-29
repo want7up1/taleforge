@@ -42,6 +42,28 @@ export interface ScenarioSummary {
   description?: string
 }
 
+/** 词库（货架件）：剧本 craft.lexicons 声明了才用 */
+export interface LexiconItem {
+  id: string
+  title: string
+  groups: number
+  words: number
+  /** 进 GM 固定前缀的字数 */
+  chars: number
+  /** 文件坏了：运行时跳过 */
+  failed?: string
+  usedBy: { id: string; title: string }[]
+}
+
+export interface LexiconImportResult {
+  ok: boolean
+  id?: string
+  title?: string
+  replaced?: boolean
+  issues?: { path: string; message: string }[]
+  brief: string
+}
+
 export interface StoryAct {
   id: string
   title: string
@@ -59,7 +81,7 @@ export interface StoryDetail {
   cast: { id: string; name: string; identity: string }[]
   opening: { scene: string; hook: string; chapter?: string }
   acts: StoryAct[]
-  craft?: { modules: string[]; rating?: string; rules?: string[] }
+  craft?: { modules: string[]; rating?: string; rules?: string[]; lexicons?: string[] }
   mechanics?: {
     resources?: unknown[]
     attributes?: unknown[]

@@ -6,7 +6,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { ChatOptions, ChatRequest, ChatResult, LlmClient, ToolCall } from '@taleforge/llm'
-import { storySchema, type Story } from '@taleforge/scenario-compiler'
+import { storySchema, type Lexicon, type Story } from '@taleforge/scenario-compiler'
 import { SessionStore } from '@taleforge/store'
 import { Engine, type EngineSettings } from './engine.ts'
 
@@ -139,7 +139,7 @@ export const settings = (over: Partial<EngineSettings> = {}): EngineSettings => 
   ...over,
 })
 
-export function makeEngine(opts: { llm?: FakeLlm; settings?: Partial<EngineSettings>; story?: Story; rolls?: number[] } = {}) {
+export function makeEngine(opts: { llm?: FakeLlm; settings?: Partial<EngineSettings>; story?: Story; rolls?: number[]; lexicons?: () => Lexicon[] } = {}) {
   const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'tf-engine-')))
   const llm = opts.llm ?? new FakeLlm()
   const rolls = [...(opts.rolls ?? [])]
@@ -148,6 +148,7 @@ export function makeEngine(opts: { llm?: FakeLlm; settings?: Partial<EngineSetti
     llm,
     settings: () => settings(opts.settings),
     currentStory: () => opts.story,
+    lexicons: ids => (opts.lexicons?.() ?? []).filter(l => ids.includes(l.id)),
     agentPersona: '你是工坊。',
     agentTools: () => [],
     observerLog: path.join(store.root, 'observer-v2.jsonl'),

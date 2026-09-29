@@ -15,7 +15,7 @@
  */
 import type { AgentTool, ChatMessage, ChatResult, LlmClient, ReasoningEffort, ToolCall } from '@taleforge/llm'
 import { applyAllocations } from '@taleforge/mechanics'
-import { renderPersona, type Story } from '@taleforge/scenario-compiler'
+import { renderPersona, type Lexicon, type Story } from '@taleforge/scenario-compiler'
 import type { SessionStore, StoredEvent } from '@taleforge/store'
 import type {
   ActAdvancedData,
@@ -65,6 +65,8 @@ export interface EngineDeps {
   settings: () => EngineSettings
   /** 剧本现行正式版（进行中的局从这里取热字段）；找不到就只用开局快照 */
   currentStory?: (id: string) => Story | undefined
+  /** 词库现行版：按 id 现读（改了重新导入，下一回合就用上），缺的、坏的跳过 */
+  lexicons?: (ids: readonly string[]) => Lexicon[]
   /** 工坊与修改对话的 persona 与工具 */
   agentPersona?: string
   agentTools?: () => AgentTool[]
@@ -433,8 +435,18 @@ export class Engine {
     return hotStory(snapshot, this.deps.currentStory?.(snapshot.id))
   }
 
+  /** 剧本选用的词库现行版（craft.lexicons 是热字段，词库内容也现读）。 */
+  private lexiconsFor(story: Story): Lexicon[] {
+    const ids = story.craft.lexicons ?? []
+    return ids.length && this.deps.lexicons ? this.deps.lexicons(ids) : []
+  }
+
   private persona(story: Story, state: SessionState): string {
-    return renderPersona(story, { acts: actsOf(story, state.progress.revisions), actIndex: state.progress.actIndex })
+    return renderPersona(story, {
+      acts: actsOf(story, state.progress.revisions),
+      actIndex: state.progress.actIndex,
+      lexicons: this.lexiconsFor(story),
+    })
   }
 
   // ---- 正戏回合 ----
@@ -465,7 +477,7 @@ export class Engine {
     state = foldSession(store.read(sessionId))
     const finale = phaseOf(state) === 'finale'
     const system: ChatMessage = { role: 'system', content: this.persona(story, state) }
-    const userText = renderPlayMessage({ state, story, input: input.text, opening: Boolean(input.opening) })
+    const userText = renderPlayMessage({ state, story, input: input.text, opening: Boolean(input.opening), lexicons: this.lexiconsFor(story) })
     const handwritten = input.opening && story.opening.chapter ? story.opening.chapter : undefined
 
     let prose: { text: string; reasoning: string; steps: StepUsage[]; toolRounds: number; messages: ChatMessage[] }

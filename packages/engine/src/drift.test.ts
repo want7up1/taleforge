@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { driftNotes, intensityHits } from './drift.ts'
+import { driftNotes, freshWords, intensityHits } from './drift.ts'
 import type { TurnFact } from './drift.ts'
 
 const play = (markers: number, text = '正文'): TurnFact => ({ kind: 'play', markers, text })
@@ -66,4 +66,22 @@ test('没选用 standard 模块的剧本：平台不催强调标记', () => {
   assert.deepEqual(driftNotes(bare), [], '"每回合 2–4 处"是 standard 模块的要求，剧本没选就不该被催')
   // 同一份事实，剧本选了 standard 就照常回灌
   assert.equal(driftNotes(bare, [], true).length, 1)
+})
+
+test('强度提醒触发时附上词库里最近没用过的词；没给词就和从前一字不差', () => {
+  const bland = play(3, '他们含蓄地相拥')
+  const plain = driftNotes([bland, bland, bland], ['肉棒'])
+  const withWords = driftNotes([bland, bland, bland], ['肉棒'], false, ['缆桩', '讨海'])
+  assert.equal(withWords.length, 1)
+  assert.equal(withWords[0], `${plain[0]}词库里这几章没用过的：缆桩、讨海——挑合用的，不必都用。`)
+  assert.deepEqual(driftNotes([play(3, '肉棒')], ['肉棒'], false, ['缆桩']), [], '不触发就不附词——闭环不是常驻提醒')
+})
+
+test('freshWords：跳过最近几章出现过的，从 offset 起轮转，最多 limit 个', () => {
+  const words = ['甲', '乙', '丙', '丁', '戊']
+  assert.deepEqual(freshWords(words, ['正文里有乙'], 3), ['甲', '丙', '丁'])
+  assert.deepEqual(freshWords(words, [], 2, 3), ['丁', '戊'], '从第 3 个起')
+  assert.deepEqual(freshWords(words, [], 3, 4), ['戊', '甲', '乙'], '到头绕回')
+  assert.deepEqual(freshWords(words, ['甲乙丙丁戊'], 3), [], '全用过就不附')
+  assert.deepEqual(freshWords([], ['x'], 3), [])
 })

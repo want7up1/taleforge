@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { craftWarnings, listStories, listVersions, publishStory, readStory, workshopTools } from './index.ts'
+import { checkLexicon, checkStory, craftWarnings, deleteLexicon, listLexicons, listLexiconVersions, listStories, listVersions, loadLexicons, publishStory, readLexicon, readStory, restoreLexiconVersion, saveLexicon, workshopTools } from './index.ts'
 import { storySchema } from '@taleforge/scenario-compiler'
 
 const story = {
@@ -210,6 +210,94 @@ test('覆盖发布写回原目录：剧本住在别的目录名下时不另起�
     assert.ok(!existsSync(path.join(config.scenariosRoot, 'ws-test')), '不得出现同 id 的第二份源')
     assert.equal(listVersions(config, 'story-ws-test').length, 1)
     assert.equal((readStory(config, 'story-ws-test') as { tagline: string }).tagline, '新卖点')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('词库存取：导入即写数据卷、同 id 覆盖；坏文件照样列出（好删），运行时跳过；按声明顺序取', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tf-lex-'))
+  const dir = path.join(root, 'lexicons')
+  try {
+    const lex = (id: string, words: string[]) => ({ format: 'taleforge.lexicon.v1', id, title: `词库${id}`, groups: [{ label: '组', words }] })
+    const bad = saveLexicon(dir, { ...lex('x', ['词']), format: undefined })
+    assert.equal(bad.ok, false)
+    assert.ok(bad.issues?.some(i => i.path === 'format'))
+    const first = saveLexicon(dir, lex('a', ['甲', '乙']))
+    assert.equal(first.ok, true)
+    assert.equal(first.replaced, false)
+    assert.equal(saveLexicon(dir, lex('a', ['甲', '乙', '丙'])).replaced, true, '同 id 覆盖')
+    assert.deepEqual(readLexicon(dir, 'a')?.groups[0].words, ['甲', '乙', '丙'])
+    saveLexicon(dir, lex('b', ['丁']))
+    writeFileSync(path.join(dir, 'broken.json'), '{ 半截')
+    const listed = listLexicons(dir)
+    assert.deepEqual(listed.map(l => [l.id, l.words, Boolean(l.failed)]), [['a', 3, false], ['b', 1, false], ['broken', 0, true]])
+    assert.deepEqual(loadLexicons(dir, ['b', 'broken', 'missing', 'a']).map(l => l.id), ['b', 'a'])
+    assert.equal(readLexicon(dir, '../etc'), undefined, 'id 不合法直接不读')
+    assert.equal(deleteLexicon(dir, 'broken'), true)
+    assert.equal(deleteLexicon(dir, 'broken'), false)
+    assert.deepEqual(readdirSync(dir).filter(f => f.endsWith('.json') || f.includes('.tmp')).sort(), ['a.json', 'b.json'], '写入走临时文件 + rename，不留残渣')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('发布时核对词库：引用了还没导入的词库照样发布，但指名提醒', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tf-ws-'))
+  try {
+    const lexiconsRoot = path.join(root, 'lexicons')
+    saveLexicon(lexiconsRoot, { format: 'taleforge.lexicon.v1', id: 'have', title: '有', groups: [{ label: 'g', words: ['词'] }] })
+    const config = { scenariosRoot: path.join(root, 'scenarios'), lexiconsRoot }
+    const result = publishStory(config, { ...story, craft: { ...story.craft, lexicons: ['have', 'missing'] } })
+    assert.equal(result.ok, true)
+    assert.deepEqual(result.warnings?.filter(w => w.startsWith('craft.lexicons')).length, 1)
+    assert.match(result.warnings!.join('\n'), /「missing」还没导入/)
+    assert.doesNotMatch(result.warnings!.join('\n'), /「have」/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('词库正本在平台上：覆盖前旧版留档（最近 10 版）、可回滚且回滚本身也留档；删词库连留档一起删', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tf-lexv-'))
+  const dir = path.join(root, 'lexicons')
+  try {
+    const lex = (words: string[]) => ({ format: 'taleforge.lexicon.v1', id: 'rain', title: '雨', groups: [{ label: '雨', words }] })
+    saveLexicon(dir, lex(['一']))
+    assert.deepEqual(listLexiconVersions(dir, 'rain'), [], '新建不留档')
+    for (let i = 2; i <= 13; i++) saveLexicon(dir, lex(Array.from({ length: i }, (_, j) => `词${j}`)))
+    const versions = listLexiconVersions(dir, 'rain')
+    assert.equal(versions.length, 10, '只留最近 10 版')
+    assert.equal(versions[0].words, 12, '最新的留档是上一次保存前的那版')
+    const restored = restoreLexiconVersion(dir, 'rain', versions[0].name)
+    assert.equal(restored?.ok, true)
+    assert.equal(readLexicon(dir, 'rain')?.groups[0].words.length, 12)
+    assert.equal(listLexiconVersions(dir, 'rain')[0].words, 13, '回滚前的当前版也留了档，回滚可再回滚')
+    assert.equal(restoreLexiconVersion(dir, 'rain', '../../etc.json'), undefined)
+    assert.equal(listLexicons(dir).length, 1, '留档目录不算词库')
+    deleteLexicon(dir, 'rain')
+    assert.equal(existsSync(path.join(dir, 'versions', 'rain')), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('只校验不保存：词库给出 GM 看到的样子与字数；剧本错误带字段路径，通过时带写法与词库提醒', () => {
+  const lexCheck = checkLexicon({ format: 'taleforge.lexicon.v1', id: 'rain', title: '雨', groups: [{ label: '雨', words: ['檐溜'] }] })
+  assert.equal(lexCheck.ok, true)
+  assert.match(lexCheck.rendered!, /# 用词库（本剧本选用）[\s\S]*- 雨：檐溜/)
+  assert.ok(lexCheck.chars! > 0)
+  assert.equal(checkLexicon({ id: 'x' }).ok, false)
+  const root = mkdtempSync(path.join(tmpdir(), 'tf-chk-'))
+  try {
+    const config = { scenariosRoot: path.join(root, 'scenarios'), lexiconsRoot: path.join(root, 'lexicons') }
+    const bad = checkStory(config, { ...story, title: '' })
+    assert.equal(bad.ok, false)
+    assert.ok(bad.issues?.some(i => i.path === 'title'))
+    const ok = checkStory(config, { ...story, craft: { ...story.craft, lexicons: ['nope'] } })
+    assert.equal(ok.ok, true)
+    assert.match(ok.warnings!.join('\n'), /「nope」还没导入/)
+    assert.deepEqual(listStories(config), [], '校验不写任何东西')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

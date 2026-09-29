@@ -17,7 +17,22 @@ import {
 } from '@taleforge/engine'
 import { applyRevisionsToStory, isStoryId, scanCatalog, type CatalogEntry, type RevisionLike, type Story } from '@taleforge/scenario-compiler'
 import type { SessionStore } from '@taleforge/store'
-import { listVersions, publishStory, storyDirOf, versionsDirOf, type Config as WorkshopConfig } from '@taleforge/workshop'
+import {
+  checkLexicon,
+  checkStory,
+  deleteLexicon,
+  lexiconExists,
+  listLexicons,
+  listLexiconVersions,
+  listVersions,
+  publishStory,
+  readLexicon,
+  restoreLexiconVersion,
+  saveLexicon,
+  storyDirOf,
+  versionsDirOf,
+  type Config as WorkshopConfig,
+} from '@taleforge/workshop'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { EFFORTS, MODELS, type PlatformConfig } from './config.ts'
@@ -29,6 +44,8 @@ export interface AppDeps {
   /** 剧本源根：仓库种子在前、数据卷在后 */
   roots: string[]
   scenariosRoot: string
+  /** 词库目录（数据卷 lexicons/） */
+  lexiconsRoot: string
   /** 修改对话的映射文件（剧本 id → 会话 id） */
   editMapPath: string
   repoRoot: string
@@ -52,7 +69,7 @@ const asyncRoute
 
 export function createApp(deps: AppDeps): express.Express {
   const { engine, store, config } = deps
-  const workshop: WorkshopConfig = { scenariosRoot: deps.scenariosRoot, roots: deps.roots }
+  const workshop: WorkshopConfig = { scenariosRoot: deps.scenariosRoot, roots: deps.roots, lexiconsRoot: deps.lexiconsRoot }
   const catalog = (): CatalogEntry[] => scanCatalog(deps.roots)
   const storyById = (id: string): Story | undefined => catalog().find(e => e.id === id)?.story
 
@@ -185,6 +202,42 @@ export function createApp(deps: AppDeps): express.Express {
     res.status(result.ok ? 200 : 400).json(result)
   })
 
+  // ---- 可视化编辑器（2026-09-29 用户要求）：保存即发布新版，沿用留档与回滚 ----
+
+  /** 只校验不保存：错误带字段路径逐条返回，编辑器据此标到对应的格子上 */
+  app.post('/app/scenarios/validate', (req, res) => {
+    res.json(checkStory(workshop, req.body))
+  })
+
+  /** 新建剧本：不许撞已有 id（同 id 覆盖走编辑或导入） */
+  app.post('/app/scenarios', (req, res) => {
+    const id = String((req.body as { id?: unknown } | undefined)?.id ?? '')
+    if (catalog().some(e => e.id === id)) {
+      res.status(409).json({ ok: false, brief: `已经有 id 为「${id}」的剧本了——换一个 id，或者去编辑那部剧本` })
+      return
+    }
+    const result = publishStory(workshop, req.body, { force: true })
+    res.status(result.ok ? 200 : 400).json(result)
+  })
+
+  /**
+   * 保存编辑：id 定了不能改（冒险、修改对话、词库引用都挂在它上面）。编辑器里的删减是作者亲手做的，
+   * 不走缩水防线（那是防 GM 复述全文时丢内容的）；旧版照常留档，可在详情页回滚。
+   */
+  app.put('/app/scenarios/:id', (req, res) => {
+    const id = String(req.params.id)
+    if (!catalog().some(e => e.id === id)) {
+      notFound(res, '剧本不存在')
+      return
+    }
+    if ((req.body as { id?: unknown } | undefined)?.id !== id) {
+      res.status(400).json({ ok: false, brief: '剧本 id 定了就不能改。要换 id，新建一部剧本。' })
+      return
+    }
+    const result = publishStory(workshop, req.body, { force: true })
+    res.status(result.ok ? 200 : 400).json(result)
+  })
+
   app.get('/app/scenarios/:id/versions', (req, res) => {
     res.json({ versions: listVersions(workshop, String(req.params.id)) })
   })
@@ -211,6 +264,111 @@ export function createApp(deps: AppDeps): express.Express {
     // 回滚也是一次覆盖发布：当前版先自动留档，所以回滚本身也可再回滚
     const result = publishStory(workshop, story, { force: true })
     res.status(result.ok ? 200 : 400).json(result)
+  })
+
+  // ---- 词库（货架件，数据卷 lexicons/）：剧本 craft.lexicons 声明了才用 ----
+
+  /** 用着某个词库的剧本（删词库前要先从这些剧本里去掉） */
+  const storiesUsing = (lexiconId: string) => catalog()
+    .flatMap(e => (e.story?.craft.lexicons?.includes(lexiconId) ? [{ id: e.id, title: e.story.title }] : []))
+
+  app.get('/app/lexicons', (_req, res) => {
+    res.json({ items: listLexicons(deps.lexiconsRoot).map(l => ({ ...l, usedBy: storiesUsing(l.id) })) })
+  })
+
+  /** 导入词库：校验（错误逐条返回）→ 写数据卷；同 id 覆盖（旧版留档），用着它的冒险下一回合起就用新版。 */
+  app.post('/app/lexicons/import', (req, res) => {
+    const result = saveLexicon(deps.lexiconsRoot, req.body)
+    res.status(result.ok ? 200 : 400).json(result)
+  })
+
+  /** 只校验不保存：编辑器的实时字数与"GM 看到的样子"预览 */
+  app.post('/app/lexicons/validate', (req, res) => {
+    res.json(checkLexicon(req.body))
+  })
+
+  /** 网页上新建：不许撞已有 id（覆盖走编辑或导入） */
+  app.post('/app/lexicons', (req, res) => {
+    const id = String((req.body as { id?: unknown } | undefined)?.id ?? '')
+    if (lexiconExists(deps.lexiconsRoot, id)) {
+      res.status(409).json({ ok: false, brief: `已经有 id 为「${id}」的词库了——换一个 id，或者去编辑那个词库` })
+      return
+    }
+    const result = saveLexicon(deps.lexiconsRoot, req.body)
+    res.status(result.ok ? 200 : 400).json(result)
+  })
+
+  /** 网页上编辑：id 定了不能改（剧本靠它引用） */
+  app.put('/app/lexicons/:id', (req, res) => {
+    const id = String(req.params.id)
+    if (!lexiconExists(deps.lexiconsRoot, id)) {
+      notFound(res, '词库不存在')
+      return
+    }
+    if ((req.body as { id?: unknown } | undefined)?.id !== id) {
+      res.status(400).json({ ok: false, brief: '词库 id 定了就不能改——剧本靠它引用。要换 id，新建一个词库。' })
+      return
+    }
+    const result = saveLexicon(deps.lexiconsRoot, req.body)
+    res.status(result.ok ? 200 : 400).json(result)
+  })
+
+  /** 词库全文（JSON）：编辑器与写剧本的 AI 都读这个 */
+  app.get('/app/lexicons/:id', (req, res) => {
+    const lexicon = readLexicon(deps.lexiconsRoot, String(req.params.id))
+    if (!lexicon) {
+      notFound(res, '词库不存在')
+      return
+    }
+    res.json(lexicon)
+  })
+
+  /** GM 固定设定里这个词库的那一段（纯文本，含平台框定语）：写剧本时看"GM 实际读到什么" */
+  app.get('/app/lexicons/:id/rendered', (req, res) => {
+    const lexicon = readLexicon(deps.lexiconsRoot, String(req.params.id))
+    if (!lexicon) {
+      notFound(res, '词库不存在')
+      return
+    }
+    res.type('text/plain; charset=utf-8').send(checkLexicon(lexicon).rendered)
+  })
+
+  app.get('/app/lexicons/:id/versions', (req, res) => {
+    res.json({ versions: listLexiconVersions(deps.lexiconsRoot, String(req.params.id)) })
+  })
+
+  app.post('/app/lexicons/:id/versions/:name/restore', (req, res) => {
+    const result = restoreLexiconVersion(deps.lexiconsRoot, String(req.params.id), String(req.params.name))
+    if (!result) {
+      notFound(res, '没有这个历史版本')
+      return
+    }
+    res.status(result.ok ? 200 : 400).json(result)
+  })
+
+  app.get('/app/lexicons/:id/export', (req, res) => {
+    const lexicon = readLexicon(deps.lexiconsRoot, String(req.params.id))
+    if (!lexicon) {
+      notFound(res, '词库不存在')
+      return
+    }
+    res.setHeader('content-type', 'application/json; charset=utf-8')
+    res.setHeader('content-disposition', `attachment; filename="${lexicon.id}.lexicon.json"`)
+    res.send(JSON.stringify(lexicon, null, 2))
+  })
+
+  app.delete('/app/lexicons/:id', (req, res) => {
+    const id = String(req.params.id)
+    const users = storiesUsing(id)
+    if (users.length) {
+      res.status(409).json({ error: { code: 'in-use', message: `还有剧本用着这个词库：${users.map(u => `《${u.title}》`).join('、')}——先从它们的 craft.lexicons 里去掉` } })
+      return
+    }
+    if (!deleteLexicon(deps.lexiconsRoot, id)) {
+      notFound(res, '词库不存在')
+      return
+    }
+    res.json({ ok: true })
   })
 
   /** 剧本的玩家可见信息：隐藏真相、人物暗线与设定条目只属于 GM，下发前端等于剧透。 */

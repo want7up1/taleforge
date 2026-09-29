@@ -66,11 +66,14 @@ export function intensityHits(text: string, words: readonly string[]): number {
  * @param recent - 最近的回合事实，**新的在前**（recent[0] 是刚结束的那回合）。
  * @param words - 剧本声明的强度词表；没声明就不查这一项。
  * @param checkMarkers - 剧本是否选用了带标记工艺的模块（standard）；否则不查强调标记。
+ * @param suggest - 剧本选用的词库里最近几章没出现过的词（见 freshWords）；强度提醒触发时附在后面，
+ *   让"一次都没出现"这个事实带上可以立刻用的词。平时不出现——闭环不是常驻提醒。
  */
 export function driftNotes(
   recent: readonly TurnFact[],
   words: readonly string[] = [],
   checkMarkers = false,
+  suggest: readonly string[] = [],
 ): string[] {
   const plays = recent.filter(t => t.kind === 'play')
   const notes: string[] = []
@@ -92,7 +95,8 @@ export function driftNotes(
       && intensityRun.every(t => intensityHits(t.text, words) === 0)) {
       notes.push(
         `【强度】上${INTENSITY_STREAK} 个回合的正文，剧本声明的直白用词一次都没出现。`
-        + 'rating 是本剧写多深的唯一契约，按它写；别跟着前文攒下的含蓄先例走。',
+        + 'rating 是本剧写多深的唯一契约，按它写；别跟着前文攒下的含蓄先例走。'
+        + (suggest.length ? `词库里这几章没用过的：${suggest.join('、')}——挑合用的，不必都用。` : ''),
       )
     }
   }
@@ -103,4 +107,23 @@ export function driftNotes(
 /** 一章正文里 **加粗** 的处数 */
 export function markersOf(text: string): number {
   return (text.match(/\*\*[^*]+\*\*/g) ?? []).length
+}
+
+/**
+ * 从词库里挑最近几章正文没出现过的词（强度提醒附词用）。从 offset 处起轮转着挑——
+ * 每次触发给的不是同一批，又完全可复现（offset 由调用方按回合号给）。
+ *
+ * @param candidates - 词库全部词，最好已按组轮流排好（interleavedWords）
+ * @param recentTexts - 最近几章正文
+ */
+export function freshWords(candidates: readonly string[], recentTexts: readonly string[], limit = 10, offset = 0): string[] {
+  if (!candidates.length || limit <= 0) return []
+  const corpus = recentTexts.join('\n')
+  const start = ((offset % candidates.length) + candidates.length) % candidates.length
+  const out: string[] = []
+  for (let i = 0; i < candidates.length && out.length < limit; i++) {
+    const word = candidates[(start + i) % candidates.length]
+    if (!corpus.includes(word)) out.push(word)
+  }
+  return out
 }

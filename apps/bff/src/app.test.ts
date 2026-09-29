@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { Engine } from '@taleforge/engine'
 import { scanCatalog } from '@taleforge/scenario-compiler'
 import { SessionStore } from '@taleforge/store'
+import { loadLexicons } from '@taleforge/workshop'
 import { FakeLlm, testStoryInput } from '../../../packages/engine/src/testkit.ts'
 import { createApp } from './app.ts'
 import { PlatformConfig } from './config.ts'
@@ -24,6 +25,7 @@ async function boot(env: NodeJS.ProcessEnv = {}) {
   mkdirSync(path.join(scenariosRoot, 'kit'), { recursive: true })
   writeFileSync(path.join(scenariosRoot, 'kit', 'story.json'), JSON.stringify(testStoryInput))
   const roots = [scenariosRoot]
+  const lexiconsRoot = path.join(home, 'lexicons')
   const config = new PlatformConfig(home, env)
   const store = new SessionStore(path.join(home, 'v2'))
   const llm = new FakeLlm()
@@ -32,10 +34,11 @@ async function boot(env: NodeJS.ProcessEnv = {}) {
     llm,
     settings: () => config.settings(),
     currentStory: id => scanCatalog(roots).find(e => e.id === id)?.story,
+    lexicons: ids => loadLexicons(lexiconsRoot, ids),
     agentPersona: 'x',
     agentTools: () => [],
   })
-  const app = createApp({ engine, store, config, roots, scenariosRoot, editMapPath: path.join(home, 'v2', 'edit.json'), repoRoot })
+  const app = createApp({ engine, store, config, roots, scenariosRoot, lexiconsRoot, editMapPath: path.join(home, 'v2', 'edit.json'), repoRoot })
   const server = app.listen(0)
   await new Promise(r => server.once('listening', r))
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -264,6 +267,85 @@ test('SSE：连上即收帧，增量、事件、状态帧按单调序号到达',
     assert.ok(kinds.has('delta') && kinds.has('event') && kinds.has('state') && kinds.has('phase'))
     const seqs = frames.flatMap(f => (f.event ? [f.event.seq] : f.seq !== undefined ? [f.seq] : []))
     assert.deepEqual(seqs, [...seqs].sort((a, b) => a - b))
+  } finally {
+    t.close()
+  }
+})
+
+test('词库：导入（错误逐条返回）、列表带"用在哪些剧本"、导出、用着的删不掉；进了 GM 设定、不进玩家可见的剧本详情', async () => {
+  const t = await boot()
+  try {
+    const lexicon = { format: 'taleforge.lexicon.v1', id: 'rain', title: '雨', groups: [{ label: '雨', words: ['檐溜', '雨脚'] }] }
+    const bad = await t.call('POST', '/app/lexicons/import', { ...lexicon, groups: [] })
+    assert.equal(bad.status, 400)
+    assert.ok(bad.body.issues.length > 0)
+    assert.equal((await t.call('POST', '/app/lexicons/import', lexicon)).status, 200)
+    const story = { ...structuredClone(testStoryInput), craft: { ...testStoryInput.craft, lexicons: ['rain', 'nope'] } }
+    const imported = await t.call('POST', '/app/scenarios/import', story)
+    assert.equal(imported.status, 200)
+    assert.match(imported.body.brief, /「nope」还没导入/, '引用了没导入的词库：照样发布，但指名提醒')
+    const { body: list } = await t.call('GET', '/app/lexicons')
+    assert.deepEqual(list.items.map((l: { id: string; words: number; usedBy: { id: string }[] }) => [l.id, l.words, l.usedBy.map(u => u.id)]), [['rain', 2, ['story-kit']]])
+    const { body: exported } = await t.call('GET', '/app/lexicons/rain/export')
+    assert.equal(exported.title, '雨')
+    assert.equal((await t.call('GET', '/app/lexicons/nope/export')).status, 404)
+    assert.equal((await t.call('DELETE', '/app/lexicons/rain')).status, 409, '还有剧本用着它')
+
+    const id = (await t.call('POST', '/app/sessions', { agentPreset: 'story-kit' })).body.sessionId
+    await t.call('POST', `/app/sessions/${id}/prompt`, { text: '（开始）' })
+    await t.engine.idle(id)
+    assert.match(String(t.llm.calls.find(c => c.kind === 'prose')!.request.messages[0].content), /- 雨：檐溜、雨脚/)
+
+    await t.call('POST', '/app/scenarios/import', testStoryInput)
+    assert.equal((await t.call('DELETE', '/app/lexicons/rain')).status, 200, '剧本不再引用就能删')
+    assert.equal((await t.call('DELETE', '/app/lexicons/rain')).status, 404)
+  } finally {
+    t.close()
+  }
+})
+
+test('网页上维护词库：新建不许撞 id、编辑不许改 id；只读接口给 AI 读全文与 GM 看到的样子；保存留档可回滚', async () => {
+  const t = await boot()
+  try {
+    const lexicon = { format: 'taleforge.lexicon.v1', id: 'rain', title: '雨', groups: [{ label: '雨', words: ['檐溜'] }] }
+    const preview = await t.call('POST', '/app/lexicons/validate', lexicon)
+    assert.equal(preview.body.ok, true)
+    assert.equal((await t.call('GET', '/app/lexicons')).body.items.length, 0, '校验不保存')
+    assert.equal((await t.call('POST', '/app/lexicons', lexicon)).status, 200)
+    assert.equal((await t.call('POST', '/app/lexicons', lexicon)).status, 409, '新建撞 id')
+    assert.equal((await t.call('PUT', '/app/lexicons/rain', { ...lexicon, id: 'other' })).status, 400, 'id 不能改')
+    assert.equal((await t.call('PUT', '/app/lexicons/nope', { ...lexicon, id: 'nope' })).status, 404)
+    const updated = await t.call('PUT', '/app/lexicons/rain', { ...lexicon, groups: [{ label: '雨', words: ['檐溜', '雨脚'] }] })
+    assert.equal(updated.status, 200)
+    assert.deepEqual((await t.call('GET', '/app/lexicons/rain')).body.groups[0].words, ['檐溜', '雨脚'])
+    const rendered = await t.call('GET', '/app/lexicons/rain/rendered')
+    assert.match(rendered.body, /- 雨：檐溜、雨脚/)
+    const { body: versions } = await t.call('GET', '/app/lexicons/rain/versions')
+    assert.equal(versions.versions.length, 1)
+    assert.equal((await t.call('POST', `/app/lexicons/rain/versions/${versions.versions[0].name}/restore`)).status, 200)
+    assert.deepEqual((await t.call('GET', '/app/lexicons/rain')).body.groups[0].words, ['檐溜'])
+  } finally {
+    t.close()
+  }
+})
+
+test('剧本可视化编辑器：校验带字段路径不保存；新建不许撞 id；编辑不许改 id、旧版留档、删减不被缩水防线拦', async () => {
+  const t = await boot()
+  try {
+    const bad = await t.call('POST', '/app/scenarios/validate', { ...testStoryInput, title: '' })
+    assert.equal(bad.body.ok, false)
+    assert.ok(bad.body.issues.some((i: { path: string }) => i.path === 'title'))
+    assert.equal((await t.call('POST', '/app/scenarios', testStoryInput)).status, 409, '已有同 id 剧本')
+    const fresh = { ...structuredClone(testStoryInput), id: 'story-fresh', title: '新剧本' }
+    assert.equal((await t.call('POST', '/app/scenarios', fresh)).status, 200)
+    assert.equal((await t.call('GET', '/app/scenarios/story-fresh')).body.title, '新剧本')
+    assert.equal((await t.call('PUT', '/app/scenarios/story-kit', fresh)).status, 400, 'id 不能改')
+    assert.equal((await t.call('PUT', '/app/scenarios/story-nope', { ...fresh, id: 'story-nope' })).status, 404)
+    const trimmed = { ...structuredClone(testStoryInput), cast: [], title: '删了人物' }
+    const saved = await t.call('PUT', '/app/scenarios/story-kit', trimmed)
+    assert.equal(saved.status, 200, '作者亲手删的内容不走缩水防线')
+    assert.equal((await t.call('GET', '/app/scenarios/story-kit')).body.cast.length, 0)
+    assert.equal((await t.call('GET', '/app/scenarios/story-kit/versions')).body.versions.length, 1, '旧版留档')
   } finally {
     t.close()
   }

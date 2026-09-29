@@ -10,12 +10,17 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import path from 'node:path'
 import { toolDef, type AgentTool } from '@taleforge/llm'
 import { isStoryId, scanCatalog, storySchema, type Story } from '@taleforge/scenario-compiler'
+import { readLexicon } from './lexicons.ts'
+
+export * from './lexicons.ts'
 
 export interface Config {
   /** 用户内容根（数据卷）：工坊产出与修订落盘都写这里 */
   scenariosRoot: string
   /** 全部剧本源根（仓库种子在前、数据卷在后，后者同 id 覆盖）；缺省只有 scenariosRoot */
   roots?: string[]
+  /** 词库目录（数据卷 lexicons/）：给了才在发布时核对 craft.lexicons 引用的词库是否已导入 */
+  lexiconsRoot?: string
 }
 
 const rootsOf = (config: Config) => config.roots ?? [config.scenariosRoot]
@@ -231,7 +236,7 @@ export function publishStory(config: Config, storyInput: unknown, opts?: { force
   const dir = storyDirOf(config, story.id)
   mkdirSync(dir, { recursive: true })
   writeFileSync(path.join(dir, 'story.json'), JSON.stringify(story, null, 2))
-  const warnings = craftWarnings(story)
+  const warnings = [...craftWarnings(story), ...missingLexicons(config, story)]
   return {
     ok: true,
     id: story.id,
@@ -244,6 +249,28 @@ export function publishStory(config: Config, storyInput: unknown, opts?: { force
         ? `\n\n写法体检（已发布，不影响开局；但这些地方 GM 大概率不会照做）：\n${warnings.map(w => `- ${w}`).join('\n')}`
         : ''),
   }
+}
+
+/**
+ * 剧本引用了还没导入的词库：不拦截（词库可以后导入），但要说出来——
+ * 不说的后果是作者以为 GM 拿到了词库，其实这一段在固定前缀里根本不存在。
+ */
+function missingLexicons(config: Config, story: Story): string[] {
+  if (!config.lexiconsRoot) return []
+  const root = config.lexiconsRoot
+  return (story.craft.lexicons ?? [])
+    .filter(id => !readLexicon(root, id))
+    .map(id => `craft.lexicons：词库「${id}」还没导入平台（或文件坏了）——导入之前 GM 看不到它。去剧本库 → 词库导入。`)
+}
+
+/** 只校验不发布（可视化编辑器保存前的检查）：schema 错误逐条返回；通过时带写法体检与词库核对的提醒。 */
+export function checkStory(config: Config, storyInput: unknown): Pick<PublishResult, 'ok' | 'issues' | 'warnings'> {
+  const parsed = storySchema.safeParse(storyInput)
+  if (!parsed.success) {
+    return { ok: false, issues: parsed.error.issues.map(i => ({ path: i.path.join('.') || '(root)', message: i.message })) }
+  }
+  const warnings = [...craftWarnings(parsed.data), ...missingLexicons(config, parsed.data)]
+  return { ok: true, ...warnings.length ? { warnings } : {} }
 }
 
 /** 工坊对话的三件工具。只给工坊会话与修改对话，游戏会话永远拿不到。 */

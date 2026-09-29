@@ -82,11 +82,13 @@ export function ScenarioPage({ scenarioId, credential }: { scenarioId: string; c
             <div className="mt-3 flex flex-wrap gap-2">
               {story.world.tone.map(t => <span className="px-badge" key={t}>{t}</span>)}
               {story.craft?.modules.map(m => <span className="px-badge px-badge-amber" key={m}>{MODULE_NAME[m] ?? m}</span>)}
+              {story.craft?.lexicons?.map(id => <Link className="px-badge" href="/lexicons" key={id}>词库 · {id}</Link>)}
             </div>
             {story.craft?.rating && <p className="mt-2 text-xs text-[color:var(--muted)]">强度：{story.craft.rating}</p>}
           </div>
           <div className="grid w-full gap-2 sm:w-fit">
             <button className="px-btn px-btn-primary" disabled={pending || blocked} onClick={() => void start()} type="button">{pending ? '开局中…' : '▸ 开始新冒险'}</button>
+            <Link className="px-btn" href={`/library/${story.id}/editor`}>✎ 编辑剧本</Link>
             <Link className="px-btn" href={`/library/${story.id}/edit`}>✎ 唤起 GM 修改剧本</Link>
             <a className="px-btn" href={`/app/scenarios/${story.id}/export`} title="导出剧本源（含 GM 暗线，看了会剧透）">⇩ 导出</a>
           </div>

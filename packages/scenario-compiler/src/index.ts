@@ -3,6 +3,15 @@
  * v2 起不再生成 dsh preset 目录：引擎直接读剧本目录，每回合现取现行正式版。
  */
 export { isStoryId, loadStory, scanCatalog, type CatalogEntry } from './catalog.ts'
+export {
+  interleavedWords,
+  LEXICON_ID,
+  LEXICON_MAX_CHARS,
+  lexiconSchema,
+  renderLexicon,
+  renderLexicons,
+  type Lexicon,
+} from './lexicon.ts'
 export { applyRevisionsToStory, type MergeResult, type RevisionLike } from './merge.ts'
 export { renderPersona, type PersonaAct, type PersonaState } from './persona.ts'
 export { craftModuleNames, storySchema, type CraftModule, type LoreEntry, type Story } from './schema.ts'

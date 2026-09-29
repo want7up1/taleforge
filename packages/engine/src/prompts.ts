@@ -14,8 +14,8 @@
 import type { AppliedChange } from '@taleforge/mechanics'
 import { levelLabel } from '@taleforge/mechanics'
 import { pressureOf, remainingAnchors, revisionLines } from '@taleforge/progress'
-import type { LoreEntry, Story } from '@taleforge/scenario-compiler'
-import { driftNotes, markersOf, type TurnFact } from './drift.ts'
+import { interleavedWords, type Lexicon, type LoreEntry, type Story } from '@taleforge/scenario-compiler'
+import { driftNotes, freshWords, markersOf, type TurnFact } from './drift.ts'
 import { actsOf, attributeDefs, phaseOf, resourceDefs, type Chapter, type SessionState } from './fold.ts'
 
 /** 本章要求：尾部的最后一行，离生成点最近。只说一章的形状、篇幅、收在哪里。 */
@@ -33,6 +33,8 @@ export function hotStory(snapshot: Story, current: Story | undefined): Story {
   else delete craft.reminder
   if (current.craft.intensity_words !== undefined) craft.intensity_words = current.craft.intensity_words
   else delete craft.intensity_words
+  if (current.craft.lexicons !== undefined) craft.lexicons = current.craft.lexicons
+  else delete craft.lexicons
   const acts = snapshot.acts.map((a) => {
     const now = current.acts.find(x => x.id === a.id)
     if (!now) return a
@@ -193,10 +195,12 @@ export interface PlayTailInput {
   /** 玩家本回合的原话（开局为空） */
   input: string
   opening: boolean
+  /** 剧本选用的词库现行版（强度提醒触发时从里面挑最近没用过的词）；没有就不附 */
+  lexicons?: readonly Lexicon[]
 }
 
 /** ⑤ + ⑥：本回合的临时尾部，拼在稳定部分之后。 */
-export function renderPlayTail({ state, story, input, opening }: PlayTailInput): string {
+export function renderPlayTail({ state, story, input, opening, lexicons = [] }: PlayTailInput): string {
   const lines: string[] = []
   const panel = panelLines(state, story)
   if (panel.length) {
@@ -209,7 +213,9 @@ export function renderPlayTail({ state, story, input, opening }: PlayTailInput):
   const staged = acts[state.progress.actIndex] ? story.acts.find(a => a.id === acts[state.progress.actIndex].id)?.reminder?.trim() : undefined
   const reminder = staged || story.craft.reminder?.trim()
   if (reminder) lines.push(`【剧本提醒】${reminder}`)
-  lines.push(...driftNotes(recentFacts(state), story.craft.intensity_words ?? [], story.craft.modules.includes('standard')))
+  const facts = recentFacts(state)
+  const suggest = freshWords(interleavedWords(lexicons), facts.map(f => f.text), 10, state.chapters.length * 7)
+  lines.push(...driftNotes(facts, story.craft.intensity_words ?? [], story.craft.modules.includes('standard'), suggest))
   const last = state.chapters[state.chapters.length - 1]
   const hits = loreHits(story.lore, [input, last?.text ?? ''])
   if (hits.length) lines.push(`【设定】\n${hits.map(e => `- ${e.title}：${e.text}`).join('\n')}`)

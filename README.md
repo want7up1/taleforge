@@ -39,14 +39,14 @@ cd /path/to/taleforge && sudo docker compose up -d --build
 
 | 目录 | 内容 |
 |---|---|
-| `apps/web` | 玩家前端（Vite + React + Tailwind，界面整体移植自前作 Rpgforge；多局冒险并存，每局可存多个存档） |
+| `apps/web` | 玩家前端（Vite + React + Tailwind，界面整体移植自前作 Rpgforge；多局冒险并存，每局可存多个存档；剧本与词库的可视化编辑器） |
 | `apps/bff` | 平台服务：托管前端、剧本库、冒险与存档水晶、回合入口、SSE 推流 |
 | `packages/engine` | 内核：回合流水线、上下文组装、结算步的组装与裁决、前情提要、被动观测 |
 | `packages/llm` | DeepSeek 客户端（fetch + SSE，工具调用分片拼装，推理回传，缓存用量） |
 | `packages/store` | 会话存储：每个会话一个 JSONL 事件日志，状态由日志折叠 |
 | `packages/mechanics` / `progress` | 机制与幕进度的纯裁决逻辑 |
 | `packages/scenario-compiler` | 剧本格式（schema）、GM 固定前缀、剧本目录扫描 |
-| `packages/workshop` | 剧本发布、留档与回滚，工坊对话的工具 |
+| `packages/workshop` | 剧本发布、留档与回滚，词库存取，工坊对话的工具 |
 | `runtime/dsh-home` | 本地数据根（剧本源、会话、存档、设置，gitignored；名字沿用旧版以免改数据卷路径） |
 
-写剧本看 [AUTHORING.md](AUTHORING.md)。本地校验：`node scripts/validate-story.ts <story.json>`；会话日志回归：`node scripts/refold.ts <数据根>/v2/sessions/<id>.jsonl`。
+写剧本看 [AUTHORING.md](AUTHORING.md)。本地校验：`node scripts/validate-story.ts <story.json>`，词库 `node scripts/validate-lexicon.ts <词库.json>`；会话日志回归：`node scripts/refold.ts <数据根>/v2/sessions/<id>.jsonl`。

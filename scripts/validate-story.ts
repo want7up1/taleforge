@@ -52,6 +52,8 @@ const extras = [
   s.lore?.length && `设定条目 ${s.lore.length} 条`,
 ].filter(Boolean)
 if (extras.length) console.log(`  v1.1：${extras.join('、')}`)
+// 词库住在平台数据卷里，本地核对不了是否已导入——只报声明，导入时平台会提醒缺哪个
+if (s.craft.lexicons?.length) console.log(`  词库：${s.craft.lexicons.join('、')}（本地无法核对是否已导入平台；词库文件用 scripts/validate-lexicon.ts 自查）`)
 // 品质提示（不算错误）：必需锚点缺完成信号是卡幕/跳幕的头号来源
 if (noSignal.length) {
   console.log(`  ⚠ ${noSignal.length} 个必需锚点没写完成信号（${noSignal.map(a => a.id).join(', ')}）——强烈建议补上`)

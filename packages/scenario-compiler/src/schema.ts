@@ -7,6 +7,7 @@
  * 剧本永远只有一个现行正式版；历史版本靠 git 留档。
  */
 import { z } from 'zod'
+import { LEXICON_ID } from './lexicon.ts'
 
 export const anchorSchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, '锚点 id 需为 kebab-case'),
@@ -265,6 +266,14 @@ export const storySchema = z.object({
      * 两者都写则都进。范本只示范写法，GM 不照抄情节。
      */
     exemplar: z.string().min(200).max(6000).optional(),
+    /**
+     * 选用的词库（平台货架，存在数据卷 lexicons/，界面导入；见 lexicon.ts）：声明哪个挂哪个，
+     * 按声明顺序进固定前缀。词库只管用什么词写；写不写、写多深仍由 rating 定。
+     * 引用了还没导入的词库不算错（发布时提醒），运行时跳过。
+     */
+    lexicons: z.array(z.string().regex(LEXICON_ID, '词库 id 需为 kebab-case')).max(3)
+      .refine(ids => new Set(ids).size === ids.length, '词库 id 重复')
+      .optional(),
   }),
   /**
    * 设定条目（v1.1，可选，≤200 条）：世界书式的按需注入。触发词**精确匹配**（写全别名），

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import type { ChatMessage } from '@taleforge/llm'
-import { storySchema } from '@taleforge/scenario-compiler'
+import { lexiconSchema, storySchema } from '@taleforge/scenario-compiler'
 import { EngineError, extractAllocations, publicEvent, type Frame } from './engine.ts'
 import type { ChapterData, SettlementData } from './events.ts'
 import { FakeLlm, makeEngine, settleCall, testStory, testStoryInput, toolCall, turn } from './testkit.ts'
@@ -379,4 +379,25 @@ test('场外问题不需要剧本声明判定也能跑；没开判定的剧本�
   await turn(engine, id, '（开始）')
   assert.equal(llm.calls[0].request.toolChoice, 'none')
   assert.ok(!llm.calls[0].request.tools!.some(t => t.function.name === 'roll_check'))
+})
+
+test('词库：剧本声明了才进固定前缀，正文、结算、场外同一份；改了词库下一回合就用新版；缺的跳过', async () => {
+  let words = ['檐溜', '雨脚']
+  const lexicons = () => [lexiconSchema.parse({ format: 'taleforge.lexicon.v1', id: 'rain', title: '雨', groups: [{ label: '雨', words }] })]
+  const declared = storySchema.parse({ ...structuredClone(testStoryInput), craft: { ...testStoryInput.craft, lexicons: ['rain', 'not-imported'] } })
+  const { engine, llm } = makeEngine({ story: declared, lexicons })
+  const id = engine.createGame(declared)
+  await turn(engine, id, '（开始）')
+  const system = (kind: string) => llm.calls.filter(c => c.kind === kind).at(-1)!.request.messages[0].content as string
+  assert.match(system('prose'), /# 用词库（本剧本选用）[\s\S]*- 雨：檐溜、雨脚/)
+  assert.equal(system('settle'), system('prose'), '结算步与正文步同一份固定前缀（缓存）')
+  assert.doesNotMatch(system('prose'), /not-imported/, '还没导入的词库运行时跳过')
+  words = ['檐溜', '雨脚', '水汽']
+  await turn(engine, id, 'A. 走')
+  assert.match(system('prose'), /- 雨：檐溜、雨脚、水汽/, '词库现读：重新导入后下一回合就是新版')
+
+  const plain = makeEngine({ lexicons })
+  const other = plain.engine.createGame(testStory())
+  await turn(plain.engine, other, '（开始）')
+  assert.doesNotMatch(plain.llm.calls[0].request.messages[0].content as string, /用词库/, '剧本没声明就没有（无隐藏默认）')
 })

@@ -1,7 +1,10 @@
+import type { LexiconDraft } from './drafts.ts'
 import type {
   CredentialStatus,
   GameItem,
   HistoryEntry,
+  LexiconImportResult,
+  LexiconItem,
   SaveItem,
   ModelCatalog,
   ModelSelection,
@@ -18,6 +21,27 @@ async function json<T>(resPromise: Promise<Response>): Promise<T> {
     throw new Error(body?.error?.message ?? `HTTP ${res.status}`)
   }
   return res.json() as Promise<T>
+}
+
+/** 写操作：400/409 也带着说明正文（校验错误逐条、撞 id），一律解析回来交给调用方。 */
+async function send<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const parsed = (await res.json().catch(() => undefined)) as (T & { error?: { message?: string } }) | undefined
+  if (!parsed) throw new Error(`HTTP ${res.status}`)
+  if (res.status >= 500 || (res.status === 404 && parsed.error)) throw new Error(parsed.error?.message ?? `HTTP ${res.status}`)
+  return parsed
+}
+
+export interface StoryCheck {
+  ok: boolean
+  issues?: { path: string; message: string }[]
+  warnings?: string[]
+  brief?: string
+  id?: string
 }
 
 export const api = {
@@ -195,6 +219,47 @@ export const api = {
   /** 从头重开这一局（存档水晶不受影响） */
   restart: (sessionId: string) =>
     json<{ sessionId: string }>(fetch(`/app/sessions/${sessionId}/restart`, { method: 'POST' })),
+
+  /** 词库（货架件，数据卷 lexicons/） */
+  listLexicons: () => json<{ items: LexiconItem[] }>(fetch('/app/lexicons')),
+
+  /** 导入词库：同 id 覆盖；校验失败返回逐条错误（400 也要解析正文） */
+  importLexicon: async (lexicon: unknown) => {
+    const res = await fetch('/app/lexicons/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(lexicon),
+    })
+    return (await res.json()) as LexiconImportResult
+  },
+
+  /** 还有剧本用着它时 409 */
+  deleteLexicon: (id: string) => json<{ ok: true }>(fetch(`/app/lexicons/${id}`, { method: 'DELETE' })),
+
+  getLexicon: (id: string) => json<LexiconDraft>(fetch(`/app/lexicons/${id}`)),
+
+  /** 只校验不保存：实时字数与"GM 看到的样子" */
+  validateLexicon: (lexicon: LexiconDraft) =>
+    send<{ ok: boolean; issues?: { path: string; message: string }[]; rendered?: string; chars?: number }>('POST', '/app/lexicons/validate', lexicon),
+
+  createLexicon: (lexicon: LexiconDraft) => send<LexiconImportResult>('POST', '/app/lexicons', lexicon),
+
+  updateLexicon: (id: string, lexicon: LexiconDraft) => send<LexiconImportResult>('PUT', `/app/lexicons/${id}`, lexicon),
+
+  lexiconVersions: (id: string) =>
+    json<{ versions: { name: string; savedAt: number; words: number }[] }>(fetch(`/app/lexicons/${id}/versions`)),
+
+  restoreLexiconVersion: (id: string, name: string) =>
+    send<LexiconImportResult>('POST', `/app/lexicons/${id}/versions/${name}/restore`),
+
+  /** 剧本源全文（含暗线，作者视角）：可视化编辑器载入用 */
+  storySource: (id: string) => json<unknown>(fetch(`/app/scenarios/${id}/export`)),
+
+  validateStory: (story: unknown) => send<StoryCheck>('POST', '/app/scenarios/validate', story),
+
+  createStory: (story: unknown) => send<StoryCheck>('POST', '/app/scenarios', story),
+
+  updateStory: (id: string, story: unknown) => send<StoryCheck>('PUT', `/app/scenarios/${id}`, story),
 
   /** 导入剧本：校验失败返回逐条错误（400 也要解析正文，不走通用 json 助手） */
   importStory: async (story: unknown) => {

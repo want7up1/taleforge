@@ -2,6 +2,7 @@
  * GM 的固定前缀（上下文布局的 ① + ②），分层顺序即缓存的共享程度（从最通用到最私有）：
  *   BASE           底座：结构保证，所有剧本共享，字节固定
  *   CRAFT_MODULES  工艺货架：剧本声明选用哪个就拼哪个，同选件的剧本共享
+ *   词库            同为货架件（lexicon.ts）：剧本 craft.lexicons 选用哪个就拼哪个；没选就没有这一段
  *   剧本数据        每个剧本私有（含剧本自带工艺文本，无上限；当前幕写详细，其他幕只列标题）
  *   文风范本        opening.chapter / craft.exemplar
  *   输出契约        必须排在最末，紧邻后面的对话（见 outputContract）
@@ -14,6 +15,7 @@
  * 底座只写结构——"怎么写得好"一律在工艺模块或剧本 craft.rules 里。
  * 归因规则：结构坏 = 平台（本文件 BASE / 输出契约）；味道差 = 剧本声明。
  */
+import { renderLexicons, type Lexicon } from './lexicon.ts'
 import type { CraftModule, Story } from './schema.ts'
 
 /** 底座：结构保证。硬性规则保持个位数（护栏 2）。 */
@@ -170,6 +172,8 @@ export interface PersonaState {
   acts?: PersonaAct[]
   /** 当前幕序号，缺省 0 */
   actIndex?: number
+  /** 剧本选用的词库现行版（调用方按 craft.lexicons 取来，缺的已跳过）；不传就没有词库段 */
+  lexicons?: Lexicon[]
 }
 
 /**
@@ -197,6 +201,7 @@ export function renderPersona(story: Story, state: PersonaState = {}): string {
   return [
     BASE,
     modules,
+    renderLexicons(state.lexicons ?? []),
     `# 剧本：${story.title}
 
 ${story.tagline}

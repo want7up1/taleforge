@@ -8,6 +8,8 @@ import { CharactersPage } from './pages/CharactersPage.tsx'
 import { EditPage } from './pages/EditPage.tsx'
 import { GamesPage } from './pages/GamesPage.tsx'
 import { HistoryPage } from './pages/HistoryPage.tsx'
+import { LexiconEditPage } from './pages/LexiconEditPage.tsx'
+import { LexiconsPage } from './pages/LexiconsPage.tsx'
 import { LibraryPage } from './pages/LibraryPage.tsx'
 import { MemoryPage } from './pages/MemoryPage.tsx'
 import { NewGamePage } from './pages/NewGamePage.tsx'
@@ -16,6 +18,7 @@ import { ScenarioPage } from './pages/ScenarioPage.tsx'
 import { ScriptPage } from './pages/ScriptPage.tsx'
 import { SettingsPage } from './pages/SettingsPage.tsx'
 import { StatusPage } from './pages/StatusPage.tsx'
+import { StoryEditorPage } from './pages/StoryEditorPage.tsx'
 import { TitlePage, type PlatformHealth } from './pages/TitlePage.tsx'
 import { matchPath, navigate, usePath } from './router.tsx'
 import type { CredentialStatus } from './types.ts'
@@ -88,6 +91,11 @@ function route(path: string, credential: CredentialStatus | undefined, health: P
   if ((id = game('camp'))) return <CampPage key={id} gameId={id} />
   if ((id = matchPath('/games/:id', path)?.id)) return <Redirect to={`/games/${id}/play`} />
   if (path === '/library') return <LibraryPage />
+  if (path === '/library/new') return <StoryEditorPage key="new" />
+  if ((id = matchPath('/library/:id/editor', path)?.id)) return <StoryEditorPage key={id} scenarioId={id} />
+  if (path === '/lexicons') return <LexiconsPage />
+  if (path === '/lexicons/new') return <LexiconEditPage key="new" />
+  if ((id = matchPath('/lexicons/:id', path)?.id)) return <LexiconEditPage key={id} lexiconId={id} />
   if ((id = matchPath('/library/:id/edit', path)?.id)) return <EditPage key={id} scenarioId={id} />
   if ((id = matchPath('/library/:id', path)?.id)) return <ScenarioPage key={id} scenarioId={id} credential={credential} />
   if (path === '/workshop') return <Redirect to="/games/new" />

@@ -16,6 +16,8 @@ export function LibraryPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <a className="px-btn" href="/app/authoring-guide">⇩ 创作说明书</a>
+          <Link className="px-btn" href="/lexicons">词库</Link>
+          <Link className="px-btn" href="/library/new">✎ 新建剧本</Link>
           <Link className="px-btn px-btn-primary" href="/games/new">＋ 写 / 导入剧本</Link>
         </div>
       </section>
