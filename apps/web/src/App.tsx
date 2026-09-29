@@ -41,7 +41,7 @@ export function App() {
   const [error, setError] = useState<string>()
   /** 服务端换了前端构建：页面开着不动就一直跑旧 JS，得提示玩家刷新 */
   const [stale, setStale] = useState(false)
-  /** 标题画面的状态灯：dsh 运行时是否就绪 */
+  /** 标题画面的状态灯：平台服务是否就绪 */
   const [health, setHealth] = useState<PlatformHealth>('checking')
   const baseBuild = useRef<string | undefined>(undefined)
 
@@ -71,8 +71,8 @@ export function App() {
     const check = async () => {
       if (document.hidden) return
       try {
-        const { dsh, build } = await api.health()
-        setHealth(dsh ? 'online' : 'offline')
+        const { ok, build } = await api.health()
+        setHealth(ok ? 'online' : 'offline')
         if (!build) return
         if (baseBuild.current === undefined) baseBuild.current = build
         else if (build !== baseBuild.current) setStale(true)

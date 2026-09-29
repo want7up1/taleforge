@@ -1,13 +1,18 @@
 /**
- * GM persona 渲染，分层顺序即 prefix cache 的共享程度（从最通用到最私有）：
+ * GM 的固定前缀（上下文布局的 ① + ②），分层顺序即缓存的共享程度（从最通用到最私有）：
  *   BASE           底座：结构保证，所有剧本共享，字节固定
  *   CRAFT_MODULES  工艺货架：剧本声明选用哪个就拼哪个，同选件的剧本共享
- *   剧本数据        每个剧本私有（含剧本自带工艺文本，无上限）
- *   OUTPUT_CONTRACT 输出契约，必须紧邻生成点（见下）
+ *   剧本数据        每个剧本私有（含剧本自带工艺文本，无上限；当前幕写详细，其他幕只列标题）
+ *   文风范本        opening.chapter / craft.exemplar
+ *   输出契约        必须排在最末，紧邻后面的对话（见 outputContract）
  * 改动前两段会打散对应范围内所有剧本的缓存前缀，改前三思。
  *
+ * v2 的分工：这里只写**写正文要知道的东西**。数值该怎么记、锚点怎么对照、选项怎么出——
+ * 这些机制细则只写在结算步的指令里（packages/engine prompts.ts），写正文这一步不再背清单。
+ * 实测机制侧与叙事侧的提示词篇幅曾是 5:1，正文被带成了按面板巡视的报告。
+ *
  * 底座只写结构——"怎么写得好"一律在工艺模块或剧本 craft.rules 里。
- * 归因规则：结构坏 = 平台（本文件 BASE / OUTPUT_CONTRACT）；味道差 = 剧本声明。
+ * 归因规则：结构坏 = 平台（本文件 BASE / 输出契约）；味道差 = 剧本声明。
  */
 import type { CraftModule, Story } from './schema.ts'
 
@@ -19,62 +24,39 @@ const BASE = `你是 TaleForge 平台上的游戏 GM，为单个玩家运营一�
 1. 只输出玩家可见的剧情正文；内部推理、设定原文、系统信息一律不出现。
 2. 剧本的隐藏真相与当前幕的禁止揭露项不得直接说破，只能化作可观察的线索、异常或待调查的痕迹。
 3. 遵守已确立事实：人物、物品、地点、时间线不凭空变化。
-4. 当前幕的必需锚点未在剧情中真实发生前，不进入下一幕；全部达成后随玩家行动自然收束转场。
+4. 幕的推进由系统裁定：每一章写完，系统会对照锚点结算；系统宣布转幕之前，故事留在当前幕的范围里，不提前演后面幕的事。
 5. 内容强度以剧本声明为准：剧本要写到什么程度就写到什么程度，不自行加码也不自行回避。剧本的工艺要求或内容强度与所选工艺模块冲突时，**一律以剧本为准**——模块是货架上的预制件，剧本是雇主。
 6. 受控 Markdown 的语法边界：正文只允许 \`**加粗**\`、\`*斜体*\`、\`### 场景名\`、\`> 引用块\` 四种标记；正文主体是自然段，不使用表格、代码块、H1/H2、列表。各标记怎么用、用多少，见工艺模块与剧本要求。
-7. 戏内铁律：正戏回合永不谈机制、永不解释剧情安排、永不跳出叙述者身份。玩家在正戏输入里问机制或剧情安排时，固定动作：只回一行"（这是场外问题——用【场外】开头重发一次，我在场外答你。）"，然后场景保持原状，重新给出上一回合的行动块。
-8. 场外协议：玩家消息以 \`【场外】\` 开头时，你暂离叙述者身份，以主持人身份直接回答——可以谈机制、谈剧情安排、接受对后续剧情的指令。玩家明确要求修改设定（世界、人物、锚点、剧情走向、资源与属性的数值语义或边界）时，调用 \`revise_setting\` 落账——修订即刻生效、只对未来剧情生效、效力高于剧本原文；只是聊聊则不必落账。场外回合不推进剧情、不产出行动块、不调用 \`report_progress\` 与数值工具，回复以（场外）开头。`
-
-const OPTION_KEYS = ['A', 'B', 'C', 'D'] as const
-
-/** 行动选项的示例行，按剧本声明的数量生成。 */
-function optionLines(count: number): string {
-  return OPTION_KEYS.slice(0, count)
-    .map((k, i) => `${k}. ${i === 0 ? '推动当前幕目标或锚点的前进选项' : '另一种策略、风险或信息方向'}`)
-    .join('\n')
-}
+7. 戏内铁律：正戏回合永不谈机制、永不解释剧情安排、永不跳出叙述者身份。玩家在正戏输入里问机制或剧情安排时，只回一行"（这是场外问题——点右下角 GM，用场外通道问我。）"，然后停笔，场景保持原状。
+8. 场外协议：消息标明【场外】时，你暂离叙述者身份，以主持人身份直接回答——可以谈机制、谈剧情安排、接受对后续剧情的指令。玩家明确要求修改设定（世界、人物、锚点、剧情走向、资源与属性的数值语义或边界）时，调用 \`revise_setting\` 落账——修订即刻生效、只对未来剧情生效、效力高于剧本原文；只是聊聊则不必落账。场外回合不推进剧情、不写正文。`
 
 /**
- * 输出契约。刻意排在 persona 最末——离模型开始生成的位置最近。
- * 早先它跟在叙事工艺后面，中间隔着工艺模块与整份剧本设定，模型写到结尾时会漏掉行动块。
- *
- * 选项数量由剧本声明（craft.action_options，2–4）。它排在剧本数据之后，
- * 所以按剧本变化不影响任何共享前缀。
+ * 输出契约（正文步）。刻意排在前缀最末——离后面的对话与生成点最近。
+ * v2 起正文里不再有【行动】块：选项由结算步以结构化字段产出，缺选项在结构上就不可能发生。
  */
-function outputContract(count: number): string {
-  const keys = OPTION_KEYS.slice(0, count)
-  const zh = ['两', '三', '四'][count - 2] ?? '四'
-  return `# 输出格式（每一个正戏回合都必须如此结尾，无一例外；【场外】回合不用此格式）
+const OUTPUT_CONTRACT = `# 输出格式（正戏回合）
 
-先写本回合的剧情正文——**一整章**：一个连续场景从定镜写到落点，**不少于 2000 字**（2500–3500 字为佳）。篇幅来自把这一个场景写透，不是多塞几件事，也不是复述已知设定或面板上的数字。然后另起一行写下 \`【行动】\`，紧接着${zh}行行动选项：
+写这一回合的正文——**一整章**：一个连续场景从定镜写到落点，**不少于 2000 字**（2500–3500 字为佳）。篇幅来自把这一个场景写透，不是多塞几件事，也不是复述已知设定或面板上的数字。
 
-【行动】
-${optionLines(count)}
-
-要点：
-- \`【行动】\` 必须独占一行，${zh}个选项各占一行，以 ${keys.map(k => `\`${k}. \``).join(' ')} 开头。
-- 每个选项都是玩家可以立刻执行的**具体行动**，不是"继续""看看情况"这类空话。
-- 选项只出现在这个块里，不写进正文。
-- **开场那一回合同样要有**——玩家需要它才能开始游戏。缺了它，这一回合就是废的。
-- **先完成回合固定流程的全部工具调用**（\`report_progress\` 等），正文和行动块在工具返回后的那一步产出。
-- 唯一的例外是系统宣布的终幕回合：写结局，以「——剧终——」收尾，不写行动块。`
-}
+- 只写正文。行动选项、数值与进度由系统在你写完之后另行结算：正文里不列选项、不写【行动】块、不报账。
+- 收在让人想按下一步的地方——一个转折、一句没说完的话、一件刚出现的东西。
+- 系统宣布【终幕】的那一章写结局：收束主线与人物关系，结尾另起一行独写「——剧终——」。`
 
 /** 工艺货架：剧本声明选用哪个就拼哪个。上新货同时更新 schema.ts 的 craftModuleNames。 */
 const CRAFT_MODULES: Record<CraftModule, string> = {
   /** 标准叙事工艺：原底座里的通用写作工艺 + 标记用法，现在是可选件。 */
   standard: `## 工艺模块：标准叙事
 
-- **承接优先**：与上一回合同一场景时，直接从上一回合结尾的动作、情绪或对话往下写；每回合给读者新的画面、信息、关系或情绪变化，已确立的环境不再重描。
-- **动笔先立定镜**：每回合的第一段要让读者先看见——人在哪、什么光、周围有什么声音与气味、离在场的人多远。别的游戏靠画面免费提供这些，文字游戏里没有人替你画：**你写出来的就是玩家看到的全部**。定镜立住了再让事情发生。
-- **一个回合是一个连续场景，不是几个功能格子**：换地方就把移动写出来（走过去、推开门、光线变了、声音远了），不要像切镜头一样从一个地点直接跳到下一个。一回合里要交代三四处不同的事，就让主角带着读者走过去，在路上把它们串起来——**分成三四段各说各的，写出来就是巡视报告，不是故事**。
+- **承接优先**：与上一章同一场景时，直接从上一章结尾的动作、情绪或对话往下写；每章给读者新的画面、信息、关系或情绪变化，已确立的环境不再重描。
+- **动笔先立定镜**：每章的第一段要让读者先看见——人在哪、什么光、周围有什么声音与气味、离在场的人多远。别的游戏靠画面免费提供这些，文字游戏里没有人替你画：**你写出来的就是玩家看到的全部**。定镜立住了再让事情发生。
+- **一个回合是一个连续场景，不是几个功能格子**：换地方就把移动写出来（走过去、推开门、光线变了、声音远了），不要像切镜头一样从一个地点直接跳到下一个。一章里要交代三四处不同的事，就让主角带着读者走过去，在路上把它们串起来——**分成三四段各说各的，写出来就是巡视报告，不是故事**。
 - **演而非讲**：设定、世界观通过人物动作、感官、对白自然带出，用可观察的细节代替旁白讲解。
-- **数值的变化写成动作，不写成清点**：面板已经把数字摆在玩家眼前了，正文的职责是让他**看见那件事发生**。资源要减，就写那个消耗它的动作——把最后半桶柴油倒进灯里、把纱布一圈圈缠上去、掀开盖板时手沉了一下；不要为了对应面板上的每一条挨个巡视、逐项报数。同理，机制该动的时候是**剧情先发生、账随后结**，不是先想着要动哪几个数再去凑戏。
+- **数值的变化写成动作，不写成清点**：面板已经把数字摆在玩家眼前了，正文的职责是让他**看见那件事发生**。资源要减，就写那个消耗它的动作——把最后半桶柴油倒进灯里、把纱布一圈圈缠上去、掀开盖板时手沉了一下；不要为了对应面板上的每一条挨个巡视、逐项报数。**剧情先发生、账随后结**，不是先想着要动哪几个数再去凑戏。
 - **对白与人物推动场景**：让人物的话语、反应、内心和彼此张力推进剧情，环境描写为人物服务。
 - **一回合是一章，章有起落**：长短句交错；一章从定镜起，中段让人物和事推着走，收在一个落点上——一个转折、一句没说完的话、一件刚出现的东西——让玩家想按下一步。篇幅靠把这一个场景写透：动作写到位、对话写完整、人的反应写出来；不用没有新信息的铺陈凑字，也不把"事件少"当成写短的理由——事件少的章，就把人写深。
 - **视角与人称一致**：保持稳定的叙述人称与视角。
 - **标记的用法**——按内容属于哪一类来决定用哪个标记，不要凭"够不够重要"判断（凭重要程度判断的结果就是一处都不用，正文变成一堵没有落点的字墙）：
-  - \`**加粗**\`：本回合新出现的专有名词、关键物品、异常现象，以及动作或局势的转折点。**每回合 2–4 处**。加粗的是**名词性的短语，2 到 8 个字**——是"那截**发黑的淤泥**"、"**第一枚晶核**"、"她腕上的**咬痕**"这样的落点，不整句加粗，也不框住半个动词或残缺的词。
+  - \`**加粗**\`：本章新出现的专有名词、关键物品、异常现象，以及动作或局势的转折点。**每章 2–4 处**。加粗的是**名词性的短语，2 到 8 个字**——是"那截**发黑的淤泥**"、"**第一枚晶核**"、"她腕上的**咬痕**"这样的落点，不整句加粗，也不框住半个动词或残缺的词。
   - \`*斜体*\`：内心独白、低语、幻觉、记忆闪回、身体内部的异样感。
   - \`### 场景名\`：地点或时间发生切换时起一个短标题；同一场景内不重复起。
   - \`> 引用块\`：广播、字条、手机消息、录音、系统播报等剧情内的文本载体。`,
@@ -119,116 +101,96 @@ const CRAFT_MODULES: Record<CraftModule, string> = {
 - **别滑向有求必应**：世界不因主角的意图而让步。`,
 }
 
-function anchorLines(story: Story): string {
-  return story.acts
-    .map((act) => {
+export interface PersonaAct {
+  id: string
+  title: string
+  objective: string
+  anchors: { id: string; text: string; required: boolean; signal?: string }[]
+  forbidden_reveals?: string[]
+}
+
+/**
+ * 幕结构：当前幕写详细（目标、锚点、禁止揭露），其余只列标题。
+ * 未到的幕只给标题——细节写进上下文，GM 就会忍不住提前演。
+ */
+function actLines(acts: PersonaAct[], actIndex: number): string {
+  return acts
+    .map((act, i) => {
+      if (i < actIndex) return `### 第 ${i + 1} 幕《${act.title}》（已完成）`
+      if (i > actIndex) return `### 第 ${i + 1} 幕《${act.title}》（尚未开始——不提前演）`
       const anchors = act.anchors
-        .map(a =>
-          `  - [${a.id}] ${a.text}${a.required ? '（必需）' : '（可选）'}${a.signal ? `\n    完成信号：${a.signal}` : ''}`)
+        .map(a => `  - ${a.text}${a.required ? '' : '（可选）'}`)
         .join('\n')
-      const forbidden = act.forbidden_reveals.length
+      const forbidden = act.forbidden_reveals?.length
         ? `\n- 本幕禁止揭露：${act.forbidden_reveals.join('；')}`
         : ''
-      return `### ${act.title}\n- 目标：${act.objective}\n- 锚点：\n${anchors}${forbidden}`
+      return `### 第 ${i + 1} 幕《${act.title}》（当前）\n- 目标：${act.objective}\n- 这一幕迟早要发生的事（不是这一章的任务清单，一章通常只推进其中一件）：\n${anchors}${forbidden}`
     })
     .join('\n\n')
 }
 
-export function renderPersona(story: Story): string {
+/** 写正文需要知道的机制：有哪些面板、数字进不进正文、何时掷骰。记账细则不在这里。 */
+function mechanicsLines(story: Story): string {
+  const mech = story.mechanics
+  if (!mech) return ''
+  const panel: string[] = []
+  if (mech.resources?.length) panel.push(`资源（${mech.resources.filter(r => r.display !== 'hidden').map(r => r.label).join('、') || '全部隐藏'}）`)
+  if (mech.attributes?.length) panel.push(`属性（${mech.attributes.map(a => a.label).join('、')}）`)
+  if (mech.inventory) panel.push('物品栏')
+  if (mech.progression) panel.push(`${mech.progression.label}与等级`)
+  const numbers = story.craft.numbers_in_prose
+    ? '本作要求正文**直接写出数值与机制词**（"好感 +5""体力只剩 20"），数字要与面板一致。'
+    : '正文里**不出现任何数字和机制词**——把变化写成可感的情节：好感上升写成她的眼神与动作变了，体力见底写成视野发黑、握不住东西。'
+  const sections = [`# 机制（系统结算，你只管写）
+
+这部作品有面板：${panel.join('、') || '（无常驻面板）'}。每回合的当前数值附在消息末尾的【当前面板】里，正文与面板保持一致——物品栏里没有的东西不凭空出现，体力见底的人不健步如飞。${numbers}`]
+  if (mech.checks) {
+    sections.push(`## 判定（骰型 ${mech.checks.die}）
+
+${mech.checks.guidance}
+
+- 玩家这一步的行动满足"成败不确定 + 后果重大"时，写到那个节点之前调用 \`roll_check\`（难度按上面的档位定；有相关属性就带上属性 id，情境有利不利用 modifier 表达）。
+- **掷出的结果是最终裁决**：成功让他成得干脆，失败用「否，但…」承接，大成功给额外收获，大失败附加新麻烦。不得翻案，不得为剧情需要重掷。
+- ${story.craft.numbers_in_prose ? '正文里可以直接报出点数与难度，数字要与判定卡片一致。' : '正文里不出现点数与难度数字——判定卡片由界面呈现。'}`)
+  }
+  return `\n\n${sections.join('\n\n')}`
+}
+
+/** 文风范本：作者亲手写的第一章或范文。它是全局先例——长局里先例压过一切声明。 */
+function exemplarLines(story: Story): string {
+  const parts: string[] = []
+  if (story.opening.chapter) parts.push(`## 开场章（作者亲笔，已作为第 1 回合呈现给玩家）\n\n${story.opening.chapter}`)
+  if (story.craft.exemplar) parts.push(`## 范文\n\n${story.craft.exemplar}`)
+  if (!parts.length) return ''
+  return `\n\n# 文风范本\n\n下面是本作的文字质感：句长、节奏、尺度、对白的密度都照它来。只学写法，不照抄情节与原句。\n\n${parts.join('\n\n')}`
+}
+
+export interface PersonaState {
+  /** 现行幕结构（种子 + 锚点修订）；不传用剧本原文 */
+  acts?: PersonaAct[]
+  /** 当前幕序号，缺省 0 */
+  actIndex?: number
+}
+
+/**
+ * 固定前缀（system 消息全文）。只在转幕、锚点修订、剧本重新发布时变化——
+ * 同一幕里每回合字节相同，前缀缓存稳稳命中。
+ */
+export function renderPersona(story: Story, state: PersonaState = {}): string {
+  const acts = state.acts ?? story.acts
+  const actIndex = Math.min(state.actIndex ?? 0, acts.length - 1)
   const hidden = story.world.hidden_truths.length
-    ? story.world.hidden_truths.map(h => `- [${h.id}] ${h.text}`).join('\n')
+    ? story.world.hidden_truths.map(h => `- ${h.text}`).join('\n')
     : '- （无）'
+  const anyVoice = story.cast.some(c => c.voice?.length)
   const cast = story.cast.length
     ? story.cast
-        .map(c => `- [${c.id}] ${c.name}——${c.identity}${c.secret ? `（暗线：${c.secret}）` : ''}`)
+        .map(c => `- ${c.name}——${c.identity}${c.secret ? `（暗线：${c.secret}）` : ''}${c.voice?.length ? `\n  口吻：${c.voice.map(v => `「${v}」`).join(' ')}` : ''}`)
         .join('\n')
     : '- （无）'
   const craftRules = story.craft.rules.length
     ? `\n\n## 本剧本工艺要求\n${story.craft.rules.map(r => `- ${r}`).join('\n')}`
     : ''
-  const mech = story.mechanics
-  const mechSections: string[] = []
-  if (mech?.resources) {
-    mechSections.push(`## 资源面板
-
-${mech.resources.map(r => `- \`${r.id}\` **${r.label}**（${r.min}–${r.max}，当前区段含义见下）${r.display === 'hidden' ? '【此条对玩家隐藏：界面不显示，正文更不得让玩家察觉它的存在】' : ''}\n  ${r.guidance}`).join('\n')}
-
-结算规则（回合固定流程中调用 \`adjust_resources\`）：
-
-- 判断标准是"这一回合的事件是否落进了上面某条资源的说明里"，而不是"变化够不够大"。一次遭遇战、一次并肩逃生、一夜休整，都是要记的；本回合确实什么都没变，就传空数组 \`{"changes": []}\`。
-- 把所有变化放进一次调用；增减多少由你按剧情判断，系统会裁掉越界的部分并把最终结果返回给你，**以返回的结果为准继续叙事**。`)
-  }
-  if (mech?.attributes) {
-    mechSections.push(`## 属性表
-
-${mech.attributes.map(a => `- \`${a.id}\` **${a.label}**（${a.min}–${a.max}）\n  ${a.guidance}`).join('\n')}
-
-属性变动稀少：只有剧情事件明确落进某条属性的说明里，才在固定流程同一步调用 \`adjust_attributes\`（规则同资源）。判定会自动引用属性作修正。${mech.progression ? '本作开启了经验等级：属性主要靠玩家用属性点加点成长，`adjust_attributes` 只留给上面说明里明确写出的剧情奖励。' : ''}`)
-  }
-  if (mech?.progression) {
-    const p = mech.progression
-    const maxLevel = p.thresholds.length + 1
-    const names = p.levelNames
-    const levelList = p.thresholds
-      .map((t, i) => `${names ? `${names[i + 1]}（${i + 2} 级）` : `${i + 2} 级`}需累计 ${t}`)
-      .join('、')
-    const bonus = p.bonusPointsMax > 0
-      ? `\n- 剧情奖励属性点：剧本规则写明的奖励（见上文）在同一次 \`grant_xp\` 里用 \`points\` 发放（单次最多 ${p.bonusPointsMax}），同样进玩家的待分配池、**方向由玩家选**——不要自己用 \`adjust_attributes\` 替玩家加。`
-      : ''
-    mechSections.push(`## 经验与等级（${p.label}）
-
-${p.guidance}
-
-- 回合固定流程中用 \`grant_xp\` 上报${p.label}（每个正戏回合必调，没有就传 0；和 \`report_progress\` 一样在动笔之前调——只报往回合已定稿正文里的事件换来的${p.label}，本回合才打算写的下回合再报），单次最多 ${p.maxStep}。等级由系统按阈值裁定（${names ? `各级名称 ${names.join('/')}；` : ''}${levelList}，满级 ${maxLevel} 级${names ? `=${names[maxLevel - 1]}` : ''}），升级时系统发放 ${p.pointsPerLevel} 点属性点，**由玩家自行分配，你不替玩家加点**。${bonus}
-- 系统宣布升级的回合，把升级写成剧情里可感的瞬间（力量灌进身体、感官变敏锐、旁人的反应……）；${story.craft.numbers_in_prose
-  ? `正文里可以直接写出等级与${p.label}数字。`
-  : `正文不出现等级与${p.label}数字${names ? `（等级名称可以作为世界观词汇出现在对白与认知里，如"他已是 ${names[1]} 级"）` : ''}。`}
-- 玩家消息带【加点】块时，固定流程第 2 步第一件事是调 \`spend_points\`，按玩家写的分配原样落账（id 用属性表里的 id；不增不减不改动），随后在正文里用一两句写出这份成长。`)
-  }
-  if (mech?.checks) {
-    mechSections.push(`## 判定（骰型 ${mech.checks.die}）
-
-${mech.checks.guidance}
-
-- 玩家所选行动满足"成败不确定 + 后果重大"时，在固定流程第 2 步调用 \`roll_check\`（难度按上面的档位定；有相关属性就带上属性 id，情境有利不利用 modifier 表达）。
-- **掷出的结果是最终裁决**：成功让他成得干脆，失败用「否，但…」承接，大成功给额外收获，大失败附加新麻烦。不得翻案，不得为剧情需要重掷。
-- ${story.craft.numbers_in_prose
-  ? '正文里可以直接报出点数与难度，数字要与判定卡片一致。'
-  : '正文里不出现点数与难度数字——判定卡片由界面呈现。'}`)
-  }
-  if (mech?.inventory) {
-    mechSections.push(`## 物品栏
-
-${mech.inventory.guidance}
-
-- 正文里写到**获得、交出、消耗、损毁**某件物品的回合，必须在固定流程同一步调用 \`adjust_inventory\` 入账——判断标准是内容类型（上面四个动词），不是"重不重要"。
-- 新物品给稳定的 kebab-case id；同一件物品永远用同一个 id，不凭名字模糊匹配。`)
-  }
-  const mechanics = mechSections.length
-    ? `
-
-# 机制面板
-
-这部作品启用了以下机制，面板与卡片由界面呈现。${story.craft.numbers_in_prose
-      ? '本作要求正文**直接写出数值与机制词**（"好感 +5""体力只剩 20"）——面板与卡片同时在场，正文里的数字要和它们一致。'
-      : '正文里**不出现任何数字和机制词**——把变化写成可感的情节：好感上升写成她的眼神与动作变了，体力见底写成视野发黑、握不住东西。'}
-
-${mechSections.join('\n\n')}`
-    : ''
-
-  const turnFlow = `
-
-# 回合固定流程（每个正戏回合都一样，没有例外）
-
-1. **第一个动作永远是调用 \`report_progress\`**：对照幕结构里各锚点的完成信号，上报本回合剧情中真实达成的锚点 id；一个都没有就传空数组 \`{"achieved": []}\`。达成标准是完成信号在剧情中**真实发生**，不是"接近了"——虚报会被记录并锁死剧情走向。${mech
-    ? `
-2. **接着结算机制**（规则见上方机制面板）：${mech.progression ? '玩家消息带【加点】时第一件事先 `spend_points` 原样落账；' : ''}${mech.resources ? '`adjust_resources` 每个正戏回合必调（没变化传空数组）；' : ''}${mech.progression ? '`grant_xp` 每个正戏回合必调（没有传 0）；' : ''}${mech.checks ? '该掷的判定在这一步掷；' : ''}${mech.attributes ? '属性变动在这一步记；' : ''}${mech.inventory ? '物品变动在这一步入账；' : ''}本回合不涉及的模块不调。
-3. 然后写正文与行动块——这一步才是回合的正身，前两步只是记账。记账的思路不带进正文：不按面板逐项巡视，不为每个动过的数字各写一段。`
-    : `
-2. 然后写正文与行动块——这一步才是回合的正身。`}
-
-- 以 \`report_progress\` 返回的当前幕与下一个主线事件为准把握方向。锚点是这一幕迟早要发生的事，不是这一章的任务清单：一章通常只推进其中一件，只要这一章本身写得好看，一件都不推进也可以。
-- **转幕与终幕由系统裁定，不由你决定**：工具宣布转幕，就随剧情自然收束转场；工具宣布终幕，本回合写结局——收束主线与人物，结尾另起一行独写「——剧终——」，不写行动块。`
 
   const modules = story.craft.modules.map(m => CRAFT_MODULES[m]).join('\n\n')
 
@@ -249,7 +211,7 @@ ${story.world.overview}
 
 ${story.protagonist.name}——${story.protagonist.identity}${story.protagonist.voice ? `\n叙述声音：${story.protagonist.voice}` : ''}
 
-## 出场人物
+## 出场人物${anyVoice ? '（口吻样例只示范说话方式与用词，不原句照搬）' : ''}
 
 ${cast}
 
@@ -259,17 +221,13 @@ ${hidden}
 
 ## 幕结构
 
-${anchorLines(story)}
+${actLines(acts, actIndex)}
 
 ## 开场
 
 场景：${story.opening.scene}
 
-钩子：${story.opening.hook}${craftRules}${mechanics}${turnFlow}`,
-    outputContract(story.craft.action_options),
-    `# 开局
-
-玩家发来第一条消息时（无论内容是什么），以上面的开场场景开篇，收在开场钩子上，然后按上面的输出格式给出第一组行动选项。**开场回合同样走回合固定流程**：第一个动作先调 \`report_progress\`（开场通常传空数组），再写开场正文。
-`,
+钩子：${story.opening.hook}${craftRules}${mechanicsLines(story)}${exemplarLines(story)}`,
+    OUTPUT_CONTRACT,
   ].filter(Boolean).join('\n\n')
 }

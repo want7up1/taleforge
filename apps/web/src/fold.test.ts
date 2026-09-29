@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { historyBoundary, lastSeqOf, mergeMessages, messageOfEvent, planResume } from './fold.ts'
+import { foldHistory, historyBoundary, lastSeqOf, lastTurnDigest, mergeMessages, planResume } from './fold.ts'
 import type { ChatMessage, HistoryEntry } from './types.ts'
 
 const ev = (seq: number, type: string, data: Record<string, unknown> = {}): HistoryEntry =>
@@ -90,26 +90,42 @@ test('planResume：拉取窗口内实时流开了新回合 → 保持生成中�
   assert.equal(plan.streaming, '新回合')
 })
 
-test('回合头注入块永不显示给玩家——认【回合流程】标记，不认它在不在开头', () => {
-  const player = { type: 'text', text: 'A. 拔刀' }
-  const flow = { type: 'text', text: '\n\n【回合流程】先调 report_progress……' }
-  // 注入块前面可能还有别的段（前导空行等），整块首字符因此不一定是【回合流程】——
-  // 前端认标记不认位置，所以带前导内容的情形也要锁住
-  const prefixed = { type: 'text', text: '\n\n【经验】grant_xp 每回合都要调。\n【回合流程】先调 report_progress……' }
-
-  for (const [label, block] of [['纯流程块', flow], ['带前导段', prefixed]] as const) {
-    const msg = messageOfEvent({
-      type: 'user/message', seq: 1, time: 0,
-      data: { content: [player, block] },
-    } as never)
-    assert.equal(msg?.text, 'A. 拔刀', `${label}：只应留下玩家自己的话`)
-  }
+test('消息流：开局那条不显示；章节是正戏、场外答复与场外提问归场外', () => {
+  const msgs = foldHistory([
+    ev(1, 'player/input', { text: '（开始）', offstage: false, opening: true }),
+    ev(2, 'turn/start', { kind: 'play', turn: 1 }),
+    ev(3, 'chapter', { turn: 1, text: '第一章' }),
+    ev(4, 'player/input', { text: '这是什么机制？', offstage: true }),
+    ev(5, 'reply', { text: '场外答复' }),
+    ev(6, 'agent/message', { content: '' }),
+  ])
+  assert.deepEqual(msgs.map(m => [m.role, m.kind, m.text]), [
+    ['assistant', 'play', '第一章'],
+    ['user', 'offstage', '这是什么机制？'],
+    ['assistant', 'offstage', '场外答复'],
+  ])
 })
 
-test('玩家自己的话不因含标记以外的方括号被吞掉', () => {
-  const msg = messageOfEvent({
-    type: 'user/message', seq: 2, time: 0,
-    data: { content: [{ type: 'text', text: '【场外】这里的机制怎么算？' }] },
-  } as never)
-  assert.equal(msg?.text, '【场外】这里的机制怎么算？')
+test('结算卡与选项取自最后一章所在回合；之后被取消的回合不清掉它', () => {
+  const receipt = (options: string[]) => ({
+    anchors: { accepted: [], ignored: [] },
+    upkeep: [{ id: 'grain', applied: -1, before: 10, after: 9, reason: '日耗', clamped: false }],
+    resources: [], attributes: [], inventory: [], options, rejected: [], ended: false,
+  })
+  const entries = [
+    ev(1, 'turn/start', { kind: 'play', turn: 1 }),
+    ev(2, 'chapter', { turn: 1, text: '一' }),
+    ev(3, 'settlement', { turn: 1, receipt: receipt(['旧选项']) }),
+    ev(4, 'turn/start', { kind: 'play', turn: 2 }),
+    ev(5, 'check/rolled', { die: 'd20', roll: 7, outcome: 'fail' }),
+    ev(6, 'chapter', { turn: 2, text: '二' }),
+    ev(7, 'settlement', { turn: 2, receipt: receipt(['甲', '乙']) }),
+    ev(8, 'turn/start', { kind: 'play', turn: 3 }),
+    ev(9, 'turn/end', { kind: 'play', turn: 3, reason: 'cancelled' }),
+  ]
+  const digest = lastTurnDigest(entries)
+  assert.deepEqual(digest.options, ['甲', '乙'])
+  assert.equal(digest.check?.roll, 7)
+  assert.deepEqual(digest.settlement.map(c => c.id), ['grain'])
+  assert.deepEqual(lastTurnDigest([]).options, [])
 })

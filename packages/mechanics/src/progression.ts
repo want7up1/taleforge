@@ -1,10 +1,10 @@
 /**
  * 经验与等级——货架第五件。分工：GM 按剧本规则上报经验（同资源条，代码裁单次上限），
  * 等级与属性点由代码按阈值表裁定；属性点由玩家自行分配，加点随下一步行动进回合，
- * GM 只能用 spend_points 原样落账（代码校验未分配池与属性上限）。
+ * 代码直接落账（校验未分配池与属性上限，GM 无权代为分配）。
  *
- * 状态同样走 tool/result.meta：经验走 kind 'mechanics/xp'；加点复用属性 meta 形状
- * （kind 'mechanics/attributes' + points 账）——属性投影照常折进去，经验投影只扣池子。
+ * v2：经验随结算步上报（这一章换来的），加点由玩家在卷宗里做、随下一步行动直接落账
+ * （代码校验未分配池与属性上限，不经过模型）。
  */
 import { applyChanges } from './resources.ts'
 import {
@@ -154,63 +154,17 @@ export function applyAllocations(
   return { changes, spent, rejected }
 }
 
-/**
- * 从玩家消息（含 BFF 回合头注入块）里取出加点请求：注入块把玩家写的【加点】行换算成
- * `allocations=[{"id":…,"points":…}]`。spend_points 以它为准落账——属性点只能由玩家分配，
- * GM 传什么都不能改动玩家的请求（代码权威，不靠提示词自觉）。
- */
-export function parseAllocationRequest(text: string): PointAllocation[] | undefined {
-  const m = /allocations=(\[[^\n]*?\])/.exec(text)
-  if (!m) return undefined
-  try {
-    const parsed: unknown = JSON.parse(m[1])
-    if (!Array.isArray(parsed)) return undefined
-    const out: PointAllocation[] = []
-    for (const a of parsed) {
-      const id = typeof (a as PointAllocation)?.id === 'string' ? (a as PointAllocation).id : ''
-      const points = Number((a as PointAllocation)?.points)
-      if (id && Number.isFinite(points) && points > 0) out.push({ id, points: Math.trunc(points) })
-    }
-    return out
-  } catch {
-    return undefined
+/** 折叠的一步：经验回执推进经验/等级/发点，加点回执扣池子；其余原样返回。 */
+export function reduceProgression(state: ProgressionState, receipt: unknown): ProgressionState {
+  if (isXpResult(receipt)) {
+    return { ...state, xp: receipt.after, level: receipt.levelAfter, granted: state.granted + receipt.pointsGranted }
   }
-}
-
-/**
- * 最近一条玩家消息里的加点请求（BFF 回合头注入块携带的 allocations=[…]）；没有即玩家本回合没要求加点。
- * 同时报告这条消息之后是否已经有一笔加点落账——同一回合只许落账一次，GM 重复调用不重复扣。
- */
-export function playerAllocationRequest(
-  events: readonly { type: string; data: unknown }[],
-): { request?: PointAllocation[]; alreadySpent: boolean } {
-  let alreadySpent = false
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i]
-    if (event.type === 'tool/result') {
-      if (isPointsResult((event.data as { meta?: unknown }).meta)) alreadySpent = true
-      continue
-    }
-    if (event.type !== 'user/message') continue
-    const content = (event.data as { content?: { text?: string }[] }).content
-    const text = Array.isArray(content) ? content.map(b => (typeof b?.text === 'string' ? b.text : '')).join('\n') : ''
-    const request = parseAllocationRequest(text)
-    return request ? { request, alreadySpent } : { alreadySpent }
-  }
-  return { alreadySpent }
-}
-
-/** 投影折叠的一步：不认识的 meta 原样返回同一引用。 */
-export function reduceProgression(state: ProgressionState, meta: unknown): ProgressionState {
-  if (isXpResult(meta)) {
-    return { ...state, xp: meta.after, level: meta.levelAfter, granted: state.granted + meta.pointsGranted }
-  }
-  if (isPointsResult(meta)) return { ...state, spent: state.spent + meta.points.spent }
+  if (isPointsResult(receipt)) return { ...state, spent: state.spent + receipt.points.spent }
   return state
 }
 
-export function foldProgression(metas: unknown[]): ProgressionState {
-  return metas.reduce(reduceProgression, initialProgression())
+export function foldProgression(receipts: unknown[]): ProgressionState {
+  return receipts.reduce(reduceProgression, initialProgression())
 }
 
 /** 玩家可见的等级快照（投影 view）。 */
@@ -242,7 +196,7 @@ export function progressionView(config: ProgressionConfig, state: ProgressionSta
     unspent: state.granted - state.spent,
     pointsPerLevel: config.pointsPerLevel,
   }
-  // dsh 要求工具/投影输出无损 JSON：可选字段不给就整个省略
+  // 可选字段不给就整个省略：日志与界面都按"有才出现"处理
   if (config.levelNames) view.levelNames = config.levelNames
   if (config.display) view.display = config.display
   return view

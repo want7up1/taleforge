@@ -97,7 +97,7 @@ export function Dossier({ story, stats, mechanics, attributes, inventory, progre
                     <span className="attr-ctl">
                       {pending > 0 && <i className="attr-pending">+{pending}</i>}
                       <b>{value}</b>
-                      {/* 加点：只攒待分配，随下一步行动进回合由 spend_points 落账 */}
+                      {/* 加点：只攒待分配，随下一步行动进回合，由代码直接落账 */}
                       {progression && onAlloc && (progression.unspent > 0 || pending > 0) && (
                         <>
                           <button className="attr-btn" disabled={pending === 0} onClick={() => onAlloc(d.id, -1)} title="撤回一点">−</button>

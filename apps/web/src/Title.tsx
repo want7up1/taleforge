@@ -53,7 +53,7 @@ export function Title({
   const status = health === 'checking'
     ? '正在检查平台连接…'
     : health === 'offline'
-      ? '平台离线——dsh 运行时未就绪'
+      ? '平台离线——服务没有响应'
       : blocked
         ? '平台在线 · 未配置 DeepSeek API Key'
         : `平台在线 · DeepSeek Key 已配置${credential?.source === 'env' ? '（环境变量）' : ''}`

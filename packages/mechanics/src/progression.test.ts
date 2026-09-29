@@ -85,7 +85,7 @@ test('applyAllocations：校验池子、上限、id；合格的不受 maxStep �
   assert.match(r.rejected[2].reason, /不存在/)
 })
 
-test('折叠：经验与加点 meta 混合重放，未分配 = 发放 - 已花', () => {
+test('折叠：经验与加点回执混合重放，未分配 = 发放 - 已花', () => {
   const a = applyXp(initialProgression(), config, 40, 'x')
   const b = applyXp(a.state, config, 40, 'y')
   const spend = { kind: 'mechanics/attributes', changes: [], points: { spent: 1 } }
@@ -100,28 +100,6 @@ test('折叠：经验与加点 meta 混合重放，未分配 = 发放 - 已花',
   assert.equal(view.next, 100)
   assert.equal(view.maxLevel, 4)
   assert.ok(!('display' in view), '未声明 display 不输出该键（无损 JSON）')
-})
-
-test('parseAllocationRequest：从回合头注入块取玩家的加点请求，脏数据整条丢弃', async () => {
-  const { parseAllocationRequest } = await import('./progression.ts')
-  const text = '【回合流程】……\n【加点】玩家本回合分配属性点——固定流程第 2 步第一件事调 spend_points 原样落账：allocations=[{"id":"str","points":2},{"id":"agi","points":0},{"points":1},{"id":"luck","points":"x"}]（无法对应属性：运气，忽略）\n【当前面板】等级：Lv.2'
-  assert.deepEqual(parseAllocationRequest(text), [{ id: 'str', points: 2 }])
-  assert.equal(parseAllocationRequest('A. 出发\n【加点】体魄 +1'), undefined, '玩家原话里没有换算后的请求就不算')
-  assert.equal(parseAllocationRequest('allocations=[not json'), undefined)
-})
-
-test('playerAllocationRequest：取最近一条玩家消息里的请求，并识别同回合已落账过', async () => {
-  const { playerAllocationRequest } = await import('./progression.ts')
-  const user = (text: string) => ({ type: 'user/message', data: { content: [{ type: 'text', text: 'A. 出发' }, { type: 'text', text }] } })
-  const spend = { type: 'tool/result', data: { meta: { kind: 'mechanics/attributes', changes: [], points: { spent: 1 } } } }
-  const other = { type: 'tool/result', data: { meta: { kind: 'mechanics/xp', after: 1, levelAfter: 1, pointsGranted: 0 } } }
-  const req = '【回合流程】…\n【加点】…：allocations=[{"id":"str","points":1}]'
-  assert.deepEqual(playerAllocationRequest([user(req), other]), { request: [{ id: 'str', points: 1 }], alreadySpent: false })
-  assert.deepEqual(playerAllocationRequest([user(req), spend, other]), { request: [{ id: 'str', points: 1 }], alreadySpent: true })
-  // 上一回合落过账不算本回合：以最近一条玩家消息为界
-  assert.deepEqual(playerAllocationRequest([user(req), spend, user(req)]), { request: [{ id: 'str', points: 1 }], alreadySpent: false })
-  assert.deepEqual(playerAllocationRequest([user('【回合流程】…没有加点')]), { alreadySpent: false })
-  assert.deepEqual(playerAllocationRequest([]), { alreadySpent: false })
 })
 
 test('剧情奖励点：裁 bonusPointsMax 进同一个池；levelNames 取显示名', async () => {

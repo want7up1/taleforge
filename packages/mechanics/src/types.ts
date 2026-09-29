@@ -60,7 +60,7 @@ export interface ResourceValue {
 
 export type ResourceState = Record<string, ResourceValue>
 
-/** 工具执行结果，同时是 tool/result.meta 的载荷。 */
+/** 资源结算回执。 */
 export interface MechanicsResult {
   kind: 'mechanics/resources'
   changes: AppliedChange[]
@@ -107,7 +107,7 @@ export interface CheckConfig {
 
 export type CheckOutcome = 'crit-success' | 'success' | 'fail' | 'crit-fail'
 
-/** 一次判定的完整裁决，落进 tool/result.meta，前端据此渲染骰子卡片。 */
+/** 一次判定的完整裁决，落进 check/rolled 事件，前端据此渲染骰子卡片。 */
 export interface CheckResult {
   kind: 'mechanics/check'
   die: Die
@@ -183,8 +183,8 @@ export type InventoryState = Record<string, { name: string; qty: number; note?: 
 // ---- 数值定义修订 ----
 
 /**
- * 数值定义的修订条目。事实来源是 progress 包的 revise_setting 工具
- * （meta kind 'progress/revision'）；这里刻意不建跨包依赖，形状以彼处为准。
+ * 数值定义的修订条目（progress 包 Revision 的 resource/attribute 分支）。
+ * 刻意不建跨包依赖，形状以彼处为准；engine 的折叠测试把两边接在一起锁住。
  */
 export interface NumericDefRevision {
   target: 'resource' | 'attribute'
@@ -197,54 +197,19 @@ export interface NumericDefRevision {
   floor?: number
 }
 
-/** 从一个会话事件里取出符合类型守卫的工具 meta；不是 tool/result 或形状不符时 undefined。 */
-export function metaOf<T>(
-  event: { type: string; data: unknown },
-  pick: (meta: unknown) => meta is T,
-): T | undefined {
-  if (event.type !== 'tool/result') return undefined
-  const meta = (event.data as { meta?: unknown }).meta
-  return pick(meta) ? meta : undefined
-}
-
-/**
- * 从事件里取数值定义修订。meta kind `progress/revision` 的事实来源在 progress 包的
- * revise_setting——只认 resource/attribute 两类条目，其余忽略。
- *
- * 这里刻意不建跨包依赖（形状以彼处为准），代价是改字段名不会有编译错误；
- * 兜底靠 contract.test.ts：那份测试真的调 progress 的工具拿 meta 再喂给这边的折叠。
- */
-export function revisionsInEvent(event: { type: string; data: unknown }): NumericDefRevision[] | undefined {
-  if (event.type !== 'tool/result') return undefined
-  const meta = (event.data as { meta?: { kind?: string; revisions?: unknown[] } }).meta
-  if (meta?.kind !== 'progress/revision' || !Array.isArray(meta.revisions)) return undefined
-  const hits = (meta.revisions as NumericDefRevision[]).filter(
-    r => r && (r.target === 'resource' || r.target === 'attribute') && typeof r.id === 'string',
-  )
-  return hits.length ? hits : undefined
-}
-
-/**
- * 周期收支声明在事件里的形状：progress 包的 report_progress 只带**声明**
- * （它不知道资源当前值，也不知道被修订改过的现行定义），实际增减由这边裁决。
- */
-export interface UpkeepMetaEntry {
+/** 一条周期收支声明：剧本 mechanics.upkeep 给出，代码每个正戏回合自动结算一次。 */
+export interface UpkeepEntry {
   id: string
   delta: number
   reason: string
+  /** 只在当前值大于此数时才滚动（"种下之后才生长"） */
   activeAbove?: number
+  label?: string
 }
 
-/** 本事件带来的周期收支声明，已按 activeAbove 过滤（"种下之后才生长"）。 */
-export function dueUpkeep(
-  values: ResourceState,
-  event: { type: string; data: unknown },
-): UpkeepMetaEntry[] {
-  if (event.type !== 'tool/result') return []
-  const meta = (event.data as { meta?: { kind?: string; upkeep?: UpkeepMetaEntry[] } }).meta
-  if (meta?.kind !== 'progress/report' || !meta.upkeep?.length) return []
-  return meta.upkeep.filter(e =>
-    e.activeAbove === undefined || (values[e.id]?.value ?? 0) > e.activeAbove)
+/** 本回合该滚的周期收支：按 activeAbove 过滤（"种下之后才生长"）。 */
+export function dueUpkeep(values: ResourceState, upkeep: readonly UpkeepEntry[]): UpkeepEntry[] {
+  return upkeep.filter(e => e.activeAbove === undefined || (values[e.id]?.value ?? 0) > e.activeAbove)
 }
 
 // ---- 经验与等级：GM 报经验，代码按阈值算等级与发点，玩家自己加点 ----
@@ -260,7 +225,7 @@ export interface ProgressionConfig {
   thresholds: number[]
   /** 每升一级发放的属性点 */
   pointsPerLevel: number
-  /** 剧情奖励属性点的单次上限（grant_xp 的 points 参数）；0/缺省 = 不开放 */
+  /** 剧情奖励属性点的单次上限（结算里 xp.points）；0/缺省 = 不开放 */
   bonusPointsMax?: number
   /** 各级显示名（C/B/A/S…），长度 = 阈值数 + 1；不给则显示 Lv.N */
   levelNames?: string[]
@@ -276,7 +241,7 @@ export interface ProgressionState {
   spent: number
 }
 
-/** grant_xp 的落账：经验裁决 + 等级裁定 + 本次发放的属性点。 */
+/** 经验结算回执：经验裁决 + 等级裁定 + 本次发放的属性点。 */
 export interface XpResult {
   kind: 'mechanics/xp'
   delta: number
@@ -302,10 +267,7 @@ export function isXpResult(value: unknown): value is XpResult {
   )
 }
 
-/**
- * spend_points 的落账：复用属性 meta 形状（changes 直接折进属性投影，不另起一套），
- * 附带 points 账供经验投影扣减未分配池。
- */
+/** 玩家加点的落账：属性变化 + 花掉的点数（经验投影据此扣减未分配池）。 */
 export interface PointsResult extends AttributesResult {
   points: { spent: number }
 }

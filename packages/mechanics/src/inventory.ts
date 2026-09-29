@@ -9,7 +9,7 @@ import type {
   InventoryState,
 } from './types.ts'
 
-/** dsh 要求工具输出无损 JSON：undefined 键必须整个省略，本文件所有对象构造遵守此约 */
+/** 可选字段不给就整个省略（日志里不出现 undefined 键），本文件所有对象构造遵守此约 */
 const withNote = (note?: string): { note?: string } => (note === undefined ? {} : { note })
 const withReason = (reason?: string): { reason?: string } => (reason === undefined ? {} : { reason })
 

@@ -1,7 +1,7 @@
 /**
  * 幕进度的纯裁决逻辑：达成上报的校验、转幕与终幕（代码权威，GM 无权决定）、
  * 压力分档（阈值 4/8 回合，沿用 Rpgforge act_pacing 的实测初值）、修订折叠。
- * 全部从事件重放可得——fork 出的支线靠同一套折叠重算。
+ * 全部从事件重放可得——重写回合截断日志后靠同一套折叠重算。
  */
 import type {
   ActDef,
@@ -10,10 +10,9 @@ import type {
   ProgressState,
   Revision,
 } from './types.ts'
-import { isReportMeta, isRevisionMeta } from './types.ts'
 
 export function initialProgress(): ProgressState {
-  return { actIndex: 0, achieved: [], turn: 0, lastProgressTurn: 0, lastUpkeepTurn: 0, phase: 'playing', revisions: [] }
+  return { actIndex: 0, achieved: [], turn: 0, lastProgressTurn: 0, phase: 'playing', revisions: [] }
 }
 
 /** 现行有效的幕结构 = 剧本种子 + anchor 类修订按序覆盖。 */
@@ -119,33 +118,22 @@ export function pressureOf(
   return { level, stalledTurns }
 }
 
-/** 单事件归约：turn/start 计回合，两种 tool/result.meta 各自落账。投影与工具读态共用。 */
-export function reduceEvent(
-  state: ProgressState,
-  event: { type: string; data: unknown },
-  seed: ActDef[],
-): ProgressState {
-  if (event.type === 'turn/start') return { ...state, turn: state.turn + 1 }
-  if (event.type !== 'tool/result') return state
-  const meta = (event.data as { meta?: unknown }).meta
-  if (isRevisionMeta(meta)) {
-    return { ...state, revisions: [...state.revisions, ...meta.revisions] }
-  }
-  if (isReportMeta(meta)) {
-    const next = applyReport(state, effectiveActs(seed, state.revisions), meta.accepted).state
-    // 记下这一回合已经滚过周期收支，同回合再次上报就不再滚
-    return meta.upkeepTurn === undefined ? next : { ...next, lastUpkeepTurn: meta.upkeepTurn }
-  }
-  return state
+/** 折叠的输入：一个正戏回合开始、一次锚点上报（结算步）、一批设定修订（场外）。 */
+export type ProgressInput =
+  | { kind: 'turn' }
+  | { kind: 'report'; accepted: string[] }
+  | { kind: 'revision'; revisions: Revision[] }
+
+/** 单步归约。投影、结算前读态、离线回归共用这一份——两份实现迟早会分叉。 */
+export function reduceProgress(state: ProgressState, input: ProgressInput, seed: ActDef[]): ProgressState {
+  if (input.kind === 'turn') return { ...state, turn: state.turn + 1 }
+  if (input.kind === 'revision') return { ...state, revisions: [...state.revisions, ...input.revisions] }
+  return applyReport(state, effectiveActs(seed, state.revisions), input.accepted).state
 }
 
-/** 从会话事件读出当前进度（工具执行时用；进程内缓存不随 fork 复制，一律重放）。 */
-export function foldEvents(
-  seed: ActDef[],
-  events: readonly { type: string; data: unknown }[],
-): ProgressState {
+export function foldProgress(seed: ActDef[], inputs: readonly ProgressInput[]): ProgressState {
   let state = initialProgress()
-  for (const event of events) state = reduceEvent(state, event, seed)
+  for (const input of inputs) state = reduceProgress(state, input, seed)
   return state
 }
 

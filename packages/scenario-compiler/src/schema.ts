@@ -1,7 +1,8 @@
 /**
- * 剧本格式 taleforge.story.v1（2026-08-19 契约定稿）。
+ * 剧本格式 taleforge.story.v1 / v1.1（v1 于 2026-08-19 契约定稿；v1.1 于 2026-09-29 只增字段）。
  * v0→v1：style 段废除，改为 craft 段显式声明——无隐藏默认，剧本里写了什么 GM 就背了什么；
- * 自带工艺文本无条数上限；锚点增加完成信号（供 F2 进度上报判定用）。
+ * 自带工艺文本无条数上限；锚点增加完成信号（结算步对照它判定）。
+ * v1→v1.1：opening.chapter、craft.exemplar、cast[].voice、lore[]，全部可选——旧剧本全部有效。
  * 一切声明都是初始种子：运行中可被修订事件覆盖（修订折叠出"现行有效设定"）。
  * 剧本永远只有一个现行正式版；历史版本靠 git 留档。
  */
@@ -25,14 +26,14 @@ export const actSchema = z.object({
   anchors: z.array(anchorSchema).min(1),
   forbidden_reveals: z.array(z.string()).default([]),
   /**
-   * 分幕贴身提醒（可选，≤600 字）：本幕进行期间替换 craft.reminder 随回合头注入。
-   * 用于世界状态/文风随剧情阶段变化的剧本——每幕只注入当前幕的那段，未到的幕玩家
+   * 分幕贴身提醒（可选，≤600 字）：本幕进行期间替换 craft.reminder，每回合放进临时尾部。
+   * 用于世界状态/文风随剧情阶段变化的剧本——每幕只放当前幕的那段，未到的幕玩家
    * 与 GM 生成点都看不到（天然防剧透）。没写的幕回落到 craft.reminder。
    */
   reminder: z.string().min(1).max(600).optional(),
   /**
-   * 本幕的节奏容忍度：连续多少个正戏回合没有主线进展，平台才开始在进度简报里加压
-   * （两倍即进高档：要求行动选项 A 必须是主线前进位）。缺省 4。
+   * 本幕的节奏容忍度：连续多少个正戏回合没有主线进展，平台才开始在主线提示里加压
+   * （两倍即进高档：要求这一章让下一个主线事件真的发生，第一个选项直指它）。缺省 4。
    *
    * **慢热的幕要把它写大。** 平台拿一个固定阈值催所有剧本，等于替剧本决定"多慢算慢"：
    * 序幕本来就该花十几个回合铺人物与日常，默认阈值会把它催成速通（实测发生过）。
@@ -44,8 +45,8 @@ export const actSchema = z.object({
 export const craftModuleNames = ['standard', 'shuang', 'harem', 'hardcore'] as const
 
 export const storySchema = z.object({
-  format: z.literal('taleforge.story.v1'),
-  /** 剧本 id 兼作 dsh agent preset id；story- 前缀是平台识别剧本 preset 的约定。 */
+  format: z.enum(['taleforge.story.v1', 'taleforge.story.v1.1']),
+  /** 剧本 id；story- 前缀是平台识别剧本的约定，数据卷里的目录名是去掉前缀的部分。 */
   id: z.string().regex(/^story-[a-z0-9][a-z0-9-]*$/, '剧本 id 必须形如 story-xxx（kebab-case）'),
   title: z.string().min(1),
   tagline: z.string().min(1),
@@ -68,11 +69,22 @@ export const storySchema = z.object({
       name: z.string().min(1),
       identity: z.string().min(1),
       secret: z.string().optional(),
+      /**
+       * 口吻样例（v1.1，可选）：这个人说话的 2–4 句原话，示范用词、句长、语气。
+       * 多角色同场时靠它区分声音；进 GM 提示词，注明"示范方式、不照抄原句"。
+       */
+      voice: z.array(z.string().min(1).max(200)).min(2).max(4).optional(),
     }))
     .default([]),
   opening: z.object({
     scene: z.string().min(1),
     hook: z.string().min(1),
+    /**
+     * 手写开场第一章（v1.1，可选）：原文直接作为第 1 回合呈现，不调模型；
+     * 同时当作全局文风范本——长局文风漂移的根因是"正文先例压过声明"，
+     * 第一章由作者亲手写，先例从第一回合就钉在作者要的质感上。
+     */
+    chapter: z.string().min(200).max(20000).optional(),
   }),
   acts: z.array(actSchema).min(1),
   /**
@@ -86,7 +98,7 @@ export const storySchema = z.object({
       /**
        * 周期收支（可选）：每个正戏回合由**代码**自动结算一次，GM 一个数字都不用记。
        * 每天的口粮消耗、灯油折耗这类纯机械规则本就属于代码权威那一侧——交给 GM 逐条报数，
-       * 既会漏（实测整回合漏调 report_progress 占 6%），又白白挤占它写正文的注意力。
+       * 既会漏（旧版实测整回合漏记占 6%），又白白挤占它写正文的注意力。
        *
        * 作物生长也用它表达，不必另造计时器：把"麦苗"做成一条 0–3 的资源，
        * 声明 `{ id: 'crop', delta: 1, activeAbove: 0 }`，GM 播种时把它设成 1，
@@ -165,7 +177,7 @@ export const storySchema = z.object({
       }).optional(),
       /**
        * 经验与等级：GM 按 guidance 上报经验（代码裁单次上限），等级与属性点由代码按阈值表
-       * 裁定，属性点由玩家自行分配（加点随下一步行动进回合，GM 只能原样落账）。需同时声明 attributes。
+       * 裁定，属性点由玩家自行分配（加点随下一步行动进回合，由代码直接落账）。需同时声明 attributes。
        */
       progression: z.object({
         /** 经验值的显示名 */
@@ -180,7 +192,7 @@ export const storySchema = z.object({
         /** 每升一级发放的属性点 */
         pointsPerLevel: z.number().int().positive(),
         /**
-         * 剧情奖励属性点的单次上限（grant_xp 的 points 参数）：GM 按 guidance 发放，进同一个
+         * 剧情奖励属性点的单次上限（结算里 xp.points）：GM 按 guidance 发放，进同一个
          * 待分配池由玩家自己加点。0（缺省）= 不开放剧情奖励点，属性只靠升级点成长。
          */
         bonusPointsMax: z.number().int().nonnegative().default(0),
@@ -219,7 +231,7 @@ export const storySchema = z.object({
     /** 内容强度声明，直接决定 GM 写到什么程度。 */
     rating: z.string().optional(),
     /**
-     * 每回合行动块给几个选项（2–4，缺省 4）。上限 4 是硬的：字母 E 留给"自由输入"这个固定按键。
+     * 每回合给几个行动选项（2–4，缺省 4；由结算步产出）。上限 4 是硬的：字母 E 留给"自由输入"这个固定按键。
      * 但**下限不该由平台定**——聚焦的悬疑或高压场面，三个选项比四个更有力，
      * 凑第四个只会凑出"再看看情况"这类空话。
      */
@@ -235,7 +247,7 @@ export const storySchema = z.object({
     /** 本剧本自带的工艺指令。剧本对"怎么写"有绝对自由度。 */
     rules: z.array(z.string()).default([]),
     /**
-     * 贴身提醒：BFF 随每回合注入到生成点旁，效力压过长局文风惯性。
+     * 贴身提醒：每回合放进临时尾部、贴住生成点，效力压过长局文风惯性。
      * 写"每回合必须坚持、且模型容易在长局里漂移"的要求；内容全由剧本定（平台不携带强度）。
      * 上限 600 字——贴身的前提是短。
      */
@@ -247,9 +259,33 @@ export const storySchema = z.object({
      * 平台永不判断内容、永不携带强度：写什么词、写多深，全由剧本定。
      */
     intensity_words: z.array(z.string().min(1)).max(60).optional(),
+    /**
+     * 文风范本（v1.1，可选）：不想固定开场时单独给一段范文（200–6000 字）。
+     * 放进 GM 提示词的固定前缀，示范质感、节奏、尺度；声明了 opening.chapter 的剧本以开场章为范本，
+     * 两者都写则都进。范本只示范写法，GM 不照抄情节。
+     */
+    exemplar: z.string().min(200).max(6000).optional(),
   }),
+  /**
+   * 设定条目（v1.1，可选，≤200 条）：世界书式的按需注入。触发词**精确匹配**（写全别名），
+   * 本回合玩家输入或上一章正文里出现任一触发词，这一条就进本回合的临时尾部；不命中就不占上下文。
+   * 不做词重叠打分——模糊匹配的误判在前作 Rpgforge 里泛滥过（护栏 3）。
+   */
+  lore: z.array(z.object({
+    id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, '设定条目 id 需为 kebab-case'),
+    title: z.string().min(1),
+    triggers: z.array(z.string().min(1)).min(1).max(12),
+    text: z.string().min(1).max(1500),
+  })).max(200).optional(),
+}).superRefine((story, ctx) => {
+  const seen = new Set<string>()
+  story.lore?.forEach((entry, i) => {
+    if (seen.has(entry.id)) ctx.addIssue({ code: 'custom', path: ['lore', i, 'id'], message: `设定条目 id 重复：${entry.id}` })
+    seen.add(entry.id)
+  })
 })
 
 export type Story = z.infer<typeof storySchema>
 export type Act = z.infer<typeof actSchema>
+export type LoreEntry = NonNullable<Story['lore']>[number]
 export type CraftModule = (typeof craftModuleNames)[number]

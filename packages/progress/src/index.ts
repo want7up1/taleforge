@@ -1,310 +1,19 @@
 /**
- * 幕进度引擎（底座能力，所有剧本都挂）。
+ * 幕进度（底座能力，所有剧本都有）——纯裁决逻辑。
  *
- * 判定分工：锚点是否达成由 GM 上报（它是剧情的作者，不设第三个裁判），
- * 但上报是每回合强制的机械流程；转幕与终幕由代码裁定，GM 只承接叙事。
- * 防漏报三道保险：每回合必调、返回值列出未完成锚点与完成信号、停滞计数分档加压。
- *
- * 状态走 tool/result.meta + projection 折叠（同机制引擎：dsh 事件白名单不认自定义类型）。
- * 设定修订也在此落账：场外由 GM 调 revise_setting，修订只对未来生效、效力高于剧本原文。
+ * 判定分工：锚点是否达成由 GM 在结算步里表态（它是剧情的作者，不设第三个裁判）；
+ * 结算步由代码强制发生、锚点 id 由 schema 枚举限定；转幕与终幕由代码裁定，GM 只承接叙事。
+ * 设定修订也在此校验：场外由 GM 调 revise_setting，修订只对未来生效、效力高于剧本原文。
  */
-import type { Context } from '@deepseek-ai/cordis'
-// 副作用导入：把 tools / sessionProjections 挂上 Context
-import '@deepseek-ai/dsh-session-projection'
-import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
-import { z } from 'zod'
-import {
-  applyReport,
-  effectiveActs,
-  foldEvents,
-  initialProgress,
-  pressureOf,
-  reduceEvent,
-  remainingAnchors,
-} from './progress.ts'
-import type { ActDef, ProgressState, Revision, UpkeepEntry } from './types.ts'
+import type { ActDef, Revision } from './types.ts'
 
 export * from './progress.ts'
 export * from './types.ts'
 
-const anchorSchema = z.object({
-  id: z.string(),
-  text: z.string(),
-  required: z.boolean(),
-  signal: z.string().optional(),
-})
-
-const progressViewSchema = z.object({
-  acts: z.array(z.object({
-    id: z.string(),
-    title: z.string(),
-    objective: z.string(),
-    anchors: z.array(anchorSchema),
-  })),
-  actIndex: z.number(),
-  achieved: z.array(z.string()),
-  turn: z.number(),
-  phase: z.enum(['playing', 'ended']),
-  pressure: z.object({ level: z.enum(['low', 'rising', 'high']), stalledTurns: z.number() }),
-  revisions: z.array(z.record(z.string(), z.unknown())),
-})
-
-export type ProgressView = z.infer<typeof progressViewSchema>
-
-// 每部剧本占自己的 key，理由见 packages/mechanics 的同名声明。
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionMap {
-    /** 幕进度快照：当前幕、锚点达成、压力、终局态、现行修订 */
-    progress: ProgressView | null
-    [key: `progress:${string}`]: ProgressView | null
-  }
-}
-
-export interface Config {
-  /** 幕结构种子，由剧本编译器写入 */
-  acts: ActDef[]
-  /**
-   * 周期收支（剧本 mechanics.upkeep）：每个正戏回合自动结算一次，GM 不必记任何数字。
-   * 挂在 report_progress 上是因为它每回合必调——不必为此新增一次工具往返、增加首字延迟。
-   */
-  upkeep?: UpkeepEntry[]
-  /**
-   * 投影 key 的剧本分片（剧本 id）。dsh 的投影 registry 全局按 key 唯一，同 key 的
-   * 注册者共享一个 unit——它假定同构，而各剧本的幕结构不同构。详见 packages/mechanics 同名字段。
-   */
-  scope?: string
-  /** 出场人物名录，供修订校验与显示 */
-  cast?: { id: string; name: string }[]
-  /** 机制条目名录（资源/属性），供数值定义修订的校验、显示与边界联动提醒 */
-  numeric?: {
-    resources?: { id: string; label: string; maxStep?: number }[]
-    attributes?: { id: string; label: string; maxStep?: number }[]
-  }
-}
-
-export const name = 'taleforge-progress'
-export const inject = ['tools']
-
-/**
- * 给 GM 的回执：已经落账了，别再手动记一遍。
- *
- * 只陈述"账已经记了"这个事实，不规定正文该怎么写它——那是工艺，归剧本与它选用的
- * 工艺模块管（standard 的"数值的变化写成动作"就是其中一条）。底座往这里塞写法要求，
- * 等于把某个模块的审美强加给所有剧本。
- */
-function renderUpkeep(entries: UpkeepEntry[]): string {
-  const parts = entries.map(e => `${e.reason}（${e.label ?? e.id} ${e.delta > 0 ? `+${e.delta}` : e.delta}）`)
-  return `【本回合已自动结算】${parts.join('；')}。`
-    + '这些已经落账，不要再调 adjust_resources 重复记；本回合的正文按剧本的工艺要求处理它们。'
-}
-
-export function apply(ctx: Context, config: Config) {
-  const seed = config?.acts ?? []
-  const upkeep = config?.upkeep ?? []
-  if (seed.length === 0) return
-  const cast = config?.cast ?? []
-
-  const readState = (events: readonly { type: string; data: unknown }[]): ProgressState =>
-    foldEvents(seed, events)
-
-  ctx.tools.register(defineTool({
-    name: 'report_progress',
-    description: '每个正戏回合的第一个动作。对照幕结构里各锚点的「完成信号」，'
-      + '上报**已经定稿的正文里**达成的锚点 id——本工具在你动笔之前调用，'
-      + '「已达成」只能来自往回合写完的正文（通常是上一回合）；'
-      + '本回合才打算写的不报，写完了等下回合再报。一个都没有就传空数组。'
-      + '返回当前幕、未完成锚点与节奏指示——以返回内容为准推进剧情。'
-      + '只认当前幕的锚点；达成标准是完成信号已经落在纸面上，'
-      + '不是"接近了"，也不是"这回合会写到"——锚点打勾不可逆、误报无法回滚，'
-      + '而剧情推进多快由剧本自己的节奏决定，不由上报快慢决定。',
-    parameters: {
-      achieved: {
-        type: 'array',
-        required: true,
-        description: '已落在往回合正文里的锚点 id 列表，可为空数组',
-        items: { type: 'string' },
-      },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          accepted: { type: 'array', required: true, items: { type: 'string' } },
-          phase: { type: 'string', required: true },
-          actIndex: { type: 'integer', required: true },
-          brief: { type: 'string', required: true },
-          // 周期收支：本回合该滚时才出现。schema 是 additionalProperties: false，
-          // 漏声明这两个键会让整个工具输出被拒绝——连 meta 一起丢，投影就再也收不到上报。
-          upkeep: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                id: { type: 'string', required: true },
-                label: { type: 'string' },
-                delta: { type: 'integer', required: true },
-                reason: { type: 'string', required: true },
-                activeAbove: { type: 'integer' },
-              },
-            },
-          },
-          upkeepTurn: { type: 'integer' },
-        },
-      },
-      render: (_args, value) => [{
-        type: 'text',
-        text: (value as { brief: string }).brief,
-      }],
-      presentationMeta: (_args, value) => {
-        const v = value as { accepted: string[]; upkeep?: UpkeepEntry[]; upkeepTurn?: number }
-        // 只在真的该滚时才写这两个键：工具输出必须是无损 JSON，值为 undefined 的键会被 dsh 整个拒绝
-        const meta: Record<string, unknown> = { kind: 'progress/report', accepted: v.accepted }
-        if (v.upkeep && v.upkeepTurn !== undefined) {
-          meta.upkeep = v.upkeep
-          meta.upkeepTurn = v.upkeepTurn
-        }
-        return meta as JsonValue
-      },
-    },
-    execute(args, exec) {
-      if (!exec.agent) throw new Error('report_progress 需要一个归属会话')
-      const state = readState(exec.agent.session.events)
-      const acts = effectiveActs(seed, state.revisions)
-      const outcome = applyReport(state, acts, (args.achieved as string[]) ?? [])
-      // 周期收支：每个正戏回合滚一次。同回合重复上报（实测存在）不再滚。
-      const due = upkeep.length > 0 && state.turn > (state.lastUpkeepTurn ?? 0)
-      const brief = renderBrief(outcome, acts, state.revisions, cast)
-        + (due ? `\n${renderUpkeep(upkeep)}` : '')
-      return Promise.resolve({
-        accepted: outcome.accepted,
-        phase: outcome.state.phase,
-        actIndex: outcome.state.actIndex,
-        brief,
-        ...due ? { upkeep, upkeepTurn: state.turn } : {},
-      })
-    },
-    presentCall: () => ({ card: 'generic', title: '上报剧情进度', kind: 'other' }),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'revise_setting',
-    description: '【场外专用】修订剧本设定，玩家在场外明确要求修改时调用。'
-      + '修订立即落账、只对未来剧情生效、效力高于剧本原文。'
-      + 'target 取值：world（世界设定补充/覆盖）、cast（修改某人物，需 id）、'
-      + 'direction（剧情走向/风格指令）、anchor（增删改锚点，需 act、op、id）、'
-      + 'resource / attribute（修改既有数值条目的语义或边界，需 id，'
-      + '可改 label/guidance/min/max/maxStep/floor；不支持中途增删条目——'
-      + '玩家要新数值条时如实说明：走剧本详情页「修改剧本」把条目写进剧本源，新开局生效；'
-      + '本局之内可先用 direction 修订把规则立起来、在正文里演，只是面板上不会有条）。',
-    parameters: {
-      revisions: {
-        type: 'array',
-        required: true,
-        description: '本次修订条目',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            target: { type: 'string', required: true, description: 'world | cast | direction | anchor | resource | attribute' },
-            id: { type: 'string', description: 'cast：人物 id；anchor：锚点 id；resource/attribute：条目 id' },
-            act: { type: 'string', description: 'anchor 专用：所属幕 id' },
-            op: { type: 'string', description: 'anchor 专用：add | edit | remove' },
-            text: { type: 'string', description: '修订内容（world/cast/direction 必填；anchor 为锚点描述）' },
-            signal: { type: 'string', description: 'anchor 专用：完成信号' },
-            required: { type: 'boolean', description: 'anchor 专用：是否必需' },
-            label: { type: 'string', description: 'resource/attribute：新显示名' },
-            guidance: { type: 'string', description: 'resource/attribute：新的数值语义（何时加减多少、区段含义）' },
-            min: { type: 'integer', description: 'resource/attribute：新下限' },
-            max: { type: 'integer', description: 'resource/attribute：新上限' },
-            maxStep: { type: 'integer', description: 'resource/attribute：新单步上限' },
-            floor: { type: 'integer', description: 'resource 专用：新下限护栏' },
-          },
-        },
-      },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          applied: { type: 'integer', required: true },
-          rejected: {
-            type: 'array',
-            required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                index: { type: 'integer', required: true },
-                reason: { type: 'string', required: true },
-              },
-            },
-          },
-          revisions: {
-            type: 'array',
-            required: true,
-            description: '规范化后落账的修订条目',
-            items: { type: 'object', additionalProperties: true, properties: {} },
-          },
-          brief: { type: 'string', required: true },
-        },
-      },
-      render: (_args, value) => [{
-        type: 'text',
-        text: (value as { brief: string }).brief,
-      }],
-      presentationMeta: (_args, value) => ({
-        kind: 'progress/revision',
-        revisions: (value as unknown as { revisions: Revision[] }).revisions,
-      }),
-    },
-    execute(args, exec) {
-      if (!exec.agent) throw new Error('revise_setting 需要一个归属会话')
-      const state = readState(exec.agent.session.events)
-      const acts = effectiveActs(seed, state.revisions)
-      const { accepted, rejected } = validateRevisions(
-        (args.revisions as Record<string, unknown>[]) ?? [],
-        acts,
-        cast,
-        config?.numeric,
-      )
-      const lines = [
-        accepted.length ? `已落账 ${accepted.length} 条修订，即刻生效，此后正戏必须遵守。` : '没有可落账的修订。',
-        ...rejected.map(r => `第 ${r.index + 1} 条被拒绝：${r.reason}`),
-        ...boundaryWarnings(accepted, config?.numeric),
-      ]
-      return Promise.resolve({
-        applied: accepted.length,
-        rejected,
-        revisions: accepted,
-        brief: lines.join('\n'),
-      })
-    },
-    presentCall: () => ({ card: 'generic', title: '修订剧本设定', kind: 'other' }),
-  }))
-
-  ctx.inject(['sessionProjections'], (projectionCtx: Context) => {
-    projectionCtx.sessionProjections.register({
-      key: config.scope ? (`progress:${config.scope}` as const) : 'progress',
-      schema: progressViewSchema,
-      init: () => initialProgress(),
-      // 不认识的事件必须原样返回同一引用，registry 靠 Object.is 判断有没有变化
-      apply: (state: ProgressState, event: { type: string; data: unknown }) =>
-        reduceEvent(state, event, seed),
-      view: (state: ProgressState): ProgressView => ({
-        acts: effectiveActs(seed, state.revisions),
-        actIndex: state.actIndex,
-        achieved: state.achieved,
-        turn: state.turn,
-        phase: state.phase,
-        pressure: pressureOf(state, effectiveActs(seed, state.revisions)[state.actIndex]?.pace),
-        revisions: state.revisions as unknown as Record<string, unknown>[],
-      }),
-      stateVersion: 1,
-    })
-  })
+/** 机制条目名录（资源/属性），供数值定义修订的校验、显示与边界联动提醒 */
+export interface NumericCatalog {
+  resources?: { id: string; label: string; maxStep?: number }[]
+  attributes?: { id: string; label: string; maxStep?: number }[]
 }
 
 /**
@@ -313,7 +22,7 @@ export function apply(ctx: Context, config: Config) {
  */
 export function boundaryWarnings(
   accepted: Revision[],
-  numeric?: Config['numeric'],
+  numeric?: NumericCatalog,
 ): string[] {
   const warnings: string[] = []
   for (const r of accepted) {
@@ -333,7 +42,7 @@ export function validateRevisions(
   entries: Record<string, unknown>[],
   acts: ActDef[],
   cast: { id: string; name: string }[],
-  numeric?: Config['numeric'],
+  numeric?: NumericCatalog,
 ): { accepted: Revision[]; rejected: { index: number; reason: string }[] } {
   const accepted: Revision[] = []
   const rejected: { index: number; reason: string }[] = []
@@ -349,7 +58,7 @@ export function validateRevisions(
       if (!known.some(n => n.id === id)) {
         return rejected.push({ index, reason: `${target} id 不存在：${id}（局内不能增删条目；新条目走剧本详情页「修改剧本」写进剧本源，新开局生效）` }) && undefined
       }
-      // dsh 要求工具输出是无损 JSON：对象里不能出现值为 undefined 的键，未给的字段必须整个省略
+      // 未给的字段整个省略：日志里不出现 undefined 键
       const fields = compact({
         label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : undefined,
         guidance: typeof raw.guidance === 'string' && raw.guidance.trim() ? raw.guidance.trim() : undefined,
@@ -410,75 +119,22 @@ export function validateRevisions(
   return { accepted, rejected }
 }
 
-/** 回给 GM 的进度简报——它是每回合的"平台注入通道"，压缩后也不丢。 */
-export function renderBrief(
-  outcome: ReturnType<typeof applyReport>,
-  acts: ActDef[],
-  revisions: Revision[],
-  cast: { id: string; name: string }[],
-): string {
+/** 现行修订的文本行（回注给 GM，效力高于剧本原文）；没有返回空数组。 */
+export function revisionLines(revisions: Revision[], cast: { id: string; name: string }[]): string[] {
   const lines: string[] = []
-  const state = outcome.state
-
-  if (outcome.accepted.length) lines.push(`锚点达成：${outcome.accepted.join('、')}`)
-  for (const ig of outcome.ignored) lines.push(`「${ig.id}」被拒绝：${ig.reason}`)
-
-  if (outcome.ended) {
-    lines.push('【终幕】全部主线锚点已达成。本回合就是结局：收束主线与人物关系，写出终幕；'
-      + '结尾另起一行独写「——剧终——」；本回合不写行动块。')
-  } else if (state.phase === 'ended') {
-    lines.push('游戏已结局，不再推进剧情。')
-  } else {
-    const act = acts[state.actIndex]
-    if (outcome.advancedTo !== undefined) {
-      lines.push(`【转幕】上一幕锚点已齐，进入《${act.title}》——随剧情自然收束转场。`)
-    }
-    lines.push(`当前：第 ${state.actIndex + 1} 幕《${act.title}》（第 ${state.turn} 回合）`)
-    lines.push(`本幕目标：${act.objective}`)
-    // 只给"下一个主线事件"，不再整列待达成清单：这段文字是离生成点最近的槽位，
-    // 实测把全部锚点连完成信号一起摆在这里，正文就长成按清单打勾的巡视报告。
-    // 全部锚点与完成信号在 persona 的幕结构里，上报时对照那里。
-    const remaining = remainingAnchors(state, acts)
-    const next = remaining.find(a => a.required)
-    if (next) {
-      lines.push(`下一个主线事件：[${next.id}] ${next.text}${next.signal ? `｜完成信号：${next.signal}` : ''}`)
-    }
-    const others = remaining.filter(a => a !== next)
-    if (others.length) {
-      lines.push(`本幕其余锚点 ${others.length} 个（${others.map(a => a.id).join('、')}），完成信号见幕结构；不必这一章就碰。`)
-    }
-    const pressure = pressureOf(state, act?.pace)
-    if (pressure.level === 'high') {
-      lines.push(`节奏：已停滞 ${pressure.stalledTurns} 回合——这一章该让「下一个主线事件」真的发生，并让行动选项 A 直指它。`)
+  for (const r of revisions) {
+    if (r.target === 'world') lines.push(`- [世界] ${r.text}`)
+    if (r.target === 'direction') lines.push(`- [走向] ${r.text}`)
+    if (r.target === 'cast') lines.push(`- [人物·${cast.find(c => c.id === r.id)?.name ?? r.id}] ${r.text}`)
+    if (r.target === 'resource' || r.target === 'attribute') {
+      const parts: string[] = []
+      if (r.label !== undefined) parts.push(`改名「${r.label}」`)
+      if (r.min !== undefined || r.max !== undefined) parts.push(`区间 ${r.min ?? '原'}–${r.max ?? '原'}`)
+      if (r.maxStep !== undefined) parts.push(`单步 ±${r.maxStep}`)
+      if (r.floor !== undefined) parts.push(`下限护栏 ${r.floor}`)
+      if (r.guidance !== undefined) parts.push(`语义改为：${r.guidance}`)
+      lines.push(`- [${r.target === 'resource' ? '资源' : '属性'}·${r.id}] ${parts.join('；')}`)
     }
   }
-
-  const active = revisions.filter(r => r.target !== 'anchor')
-  if (active.length) {
-    lines.push('现行修订（效力高于剧本原文）：')
-    for (const r of active) {
-      if (r.target === 'world') lines.push(`- [世界] ${r.text}`)
-      if (r.target === 'direction') lines.push(`- [走向] ${r.text}`)
-      if (r.target === 'cast') {
-        const who = cast.find(c => c.id === r.id)?.name ?? r.id
-        lines.push(`- [人物·${who}] ${r.text}`)
-      }
-      if (r.target === 'resource' || r.target === 'attribute') {
-        const parts: string[] = []
-        if (r.label !== undefined) parts.push(`改名「${r.label}」`)
-        if (r.min !== undefined || r.max !== undefined) parts.push(`区间 ${r.min ?? '原'}–${r.max ?? '原'}`)
-        if (r.maxStep !== undefined) parts.push(`单步 ±${r.maxStep}`)
-        if (r.floor !== undefined) parts.push(`下限护栏 ${r.floor}`)
-        if (r.guidance !== undefined) parts.push(`语义改为：${r.guidance}`)
-        lines.push(`- [${r.target === 'resource' ? '资源' : '属性'}·${r.id}] ${parts.join('；')}`)
-      }
-    }
-  }
-
-  // 输出契约的贴身提醒：工具返回值是离生成点最近的文本，契约在 persona 末尾会被两次
-  // 工具调用挤远——实测开场回合因此漏掉行动块。凡正戏回合都在此重申，终幕回合除外。
-  if (!outcome.ended && state.phase === 'playing') {
-    lines.push('提醒：本回合正文结尾必须有【行动】块——独占一行的【行动】加 A. B. C. D. 四行具体选项，缺了玩家无法继续。')
-  }
-  return lines.join('\n')
+  return lines
 }

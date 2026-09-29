@@ -8,15 +8,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@taleforge/engine": "workspace:*",
+    "@taleforge/llm": "workspace:*",
     "@taleforge/scenario-compiler": "workspace:*",
+    "@taleforge/store": "workspace:*",
     "@taleforge/workshop": "workspace:*",
     "express": "^5.1.0",
-    "ws": "^8.18.3"
+    "yaml": "^2.8.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^24.3.0",
-    "@types/ws": "^8.18.1",
     "typescript": "^5.9.2"
   }
 }

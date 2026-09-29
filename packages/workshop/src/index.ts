@@ -1,55 +1,61 @@
 /**
- * 工坊插件：只挂在 workshop preset 上，玩家剧本 preset 永不挂载（它会写文件系统）。
+ * 工坊：剧本的发布、读取、留档与回滚，外加工坊对话用的三件工具（list/read/publish_story）。
+ * 这些工具只给工坊会话与修改对话用，游戏会话永远拿不到（它们会写文件系统）。
  *
- * publish_story 是访谈的出口：校验 → 写进数据卷 scenarios/ → 立即编译成可玩 preset。
+ * publish_story 是访谈的出口：校验 → 写进数据卷 scenarios/ → 立即可玩（引擎每次开局现读目录）。
  * 校验失败把逐条错误退回给工坊 agent 自行修正——闭环在工具内完成，不经人手。
  * 写入路径由剧本 id 决定（schema 强制 story- 前缀 + kebab-case，天然无路径穿越）。
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { Context } from '@deepseek-ai/cordis'
-import { defineTool } from '@deepseek-ai/dsh-tools'
-import { compileScenario, storySchema, type PluginEntries, type Story } from '@taleforge/scenario-compiler'
-
-const STORY_ID = /^story-[a-z0-9][a-z0-9-]*$/
-
-/** 列出已发布剧本（读编译产出：那里放着每部剧本的现行正式版快照）。 */
-export function listStories(presetsRoot: string): { id: string; title: string; tagline: string }[] {
-  if (!existsSync(presetsRoot)) return []
-  const out: { id: string; title: string; tagline: string }[] = []
-  for (const entry of readdirSync(presetsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !STORY_ID.test(entry.name)) continue
-    const storyPath = path.join(presetsRoot, entry.name, 'story.json')
-    if (!existsSync(storyPath)) continue
-    try {
-      const s = JSON.parse(readFileSync(storyPath, 'utf8')) as { id: string; title: string; tagline: string }
-      out.push({ id: s.id, title: s.title, tagline: s.tagline })
-    } catch {
-      // 坏文件跳过，不让一个损坏的剧本拖垮列表
-    }
-  }
-  return out
-}
-
-/** 读取某剧本的现行正式版全文；id 不合法或不存在返回 undefined。 */
-export function readStory(presetsRoot: string, id: string): Record<string, unknown> | undefined {
-  if (!STORY_ID.test(id)) return undefined
-  const storyPath = path.join(presetsRoot, id, 'story.json')
-  if (!existsSync(storyPath)) return undefined
-  return JSON.parse(readFileSync(storyPath, 'utf8')) as Record<string, unknown>
-}
+import { toolDef, type AgentTool } from '@taleforge/llm'
+import { isStoryId, scanCatalog, storySchema, type Story } from '@taleforge/scenario-compiler'
 
 export interface Config {
   /** 用户内容根（数据卷）：工坊产出与修订落盘都写这里 */
   scenariosRoot: string
-  /** dsh preset 根 */
-  presetsRoot: string
-  /** 游戏插件入口，传给编译器 */
-  entries?: PluginEntries
+  /** 全部剧本源根（仓库种子在前、数据卷在后，后者同 id 覆盖）；缺省只有 scenariosRoot */
+  roots?: string[]
 }
 
-export const name = 'taleforge-workshop'
-export const inject = ['tools']
+const rootsOf = (config: Config) => config.roots ?? [config.scenariosRoot]
+
+/** 列出已上架剧本（现行正式版）。源损坏且没有留档的不列。 */
+export function listStories(config: Config): { id: string; title: string; tagline: string }[] {
+  return scanCatalog(rootsOf(config))
+    .flatMap(e => (e.story ? [{ id: e.id, title: e.story.title, tagline: e.story.tagline }] : []))
+}
+
+/** 某剧本现行正式版所在目录与原文；id 不合法或不存在返回 undefined。 */
+function currentOf(config: Config, id: string): { dir: string; raw: string } | undefined {
+  if (!isStoryId(id)) return undefined
+  const entry = scanCatalog(rootsOf(config)).find(e => e.id === id)
+  if (!entry) return undefined
+  const file = path.join(entry.dir, 'story.json')
+  return existsSync(file) ? { dir: entry.dir, raw: readFileSync(file, 'utf8') } : undefined
+}
+
+/** 读取某剧本的现行正式版全文；id 不合法或不存在返回 undefined。 */
+export function readStory(config: Config, id: string): Record<string, unknown> | undefined {
+  const current = currentOf(config, id)
+  if (!current) return undefined
+  try {
+    return JSON.parse(current.raw) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 发布写到哪个目录：这部剧本已经住在数据卷里就写回原处（目录名不一定等于 id），
+ * 否则按约定 `scenarios/<去掉 story- 的 id>/`。同一个根里两个目录声明同一 id，目录扫描的胜负就看 readdir 顺序了。
+ */
+export function storyDirOf(config: Config, id: string): string {
+  const current = currentOf(config, id)
+  const conventional = path.join(config.scenariosRoot, id.replace(/^story-/, ''))
+  if (current && path.resolve(path.dirname(current.dir)) === path.resolve(config.scenariosRoot)) return current.dir
+  return conventional
+}
 
 export interface PublishResult {
   ok: boolean
@@ -146,12 +152,13 @@ const shapeBrief = (s: ReturnType<typeof shapeOf>): string =>
 
 /** 覆盖发布的历史留档：旧正式版存进剧本源目录 versions/，只保留最近 N 版。 */
 export function versionsDirOf(config: Config, id: string): string {
-  return path.join(config.scenariosRoot, id.replace(/^story-/, ''), 'versions')
+  return path.join(storyDirOf(config, id), 'versions')
 }
 
 export function listVersions(config: Config, id: string): { name: string; savedAt: number; chars: number }[] {
+  if (!isStoryId(id)) return []
   const dir = versionsDirOf(config, id)
-  if (!STORY_ID.test(id) || !existsSync(dir)) return []
+  if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter(f => f.endsWith('.json'))
     .map((f) => {
@@ -164,21 +171,21 @@ export function listVersions(config: Config, id: string): { name: string; savedA
 }
 
 function snapshotCurrent(config: Config, id: string): void {
-  const currentPath = path.join(config.presetsRoot, id, 'story.json')
-  if (!existsSync(currentPath)) return
+  const current = currentOf(config, id)
+  if (!current) return
   const dir = versionsDirOf(config, id)
   mkdirSync(dir, { recursive: true })
   // 同毫秒内的连续发布不许互相覆盖留档
   let stamp = Date.now()
   while (existsSync(path.join(dir, `v-${stamp}.json`))) stamp += 1
-  writeFileSync(path.join(dir, `v-${stamp}.json`), readFileSync(currentPath, 'utf8'))
+  writeFileSync(path.join(dir, `v-${stamp}.json`), current.raw)
   for (const stale of listVersions(config, id).slice(KEEP_VERSIONS)) {
     rmSync(path.join(dir, stale.name), { force: true })
   }
 }
 
 /**
- * 发布逻辑本体（纯出入参，供工具与测试共用）。undefined 键整个省略（dsh 无损 JSON 约束）。
+ * 发布逻辑本体（纯出入参，供工具与测试共用）。可选键不给就整个省略。
  *
  * 两道防护（GM 改剧本不能改坏）：
  * 1. 覆盖发布前把旧正式版快照进 versions/（保留最近 10 版，可回滚）；
@@ -201,7 +208,7 @@ export function publishStory(config: Config, storyInput: unknown, opts?: { force
     }
   }
   const story = parsed.data
-  const previous = readStory(config.presetsRoot, story.id)
+  const previous = readStory(config, story.id)
   if (previous && !opts?.force) {
     const before = shapeOf(previous)
     const after = shapeOf(story)
@@ -221,17 +228,16 @@ export function publishStory(config: Config, storyInput: unknown, opts?: { force
     }
   }
   if (previous) snapshotCurrent(config, story.id)
-  const dir = path.join(config.scenariosRoot, story.id.replace(/^story-/, ''))
+  const dir = storyDirOf(config, story.id)
   mkdirSync(dir, { recursive: true })
   writeFileSync(path.join(dir, 'story.json'), JSON.stringify(story, null, 2))
-  compileScenario(dir, config.presetsRoot, config.entries)
   const warnings = craftWarnings(story)
   return {
     ok: true,
     id: story.id,
     title: story.title,
     ...warnings.length ? { warnings } : {},
-    brief: `《${story.title}》已发布并编译（id：${story.id}，${shapeBrief(shapeOf(story))}）。`
+    brief: `《${story.title}》已发布（id：${story.id}，${shapeBrief(shapeOf(story))}）。`
       + '告诉玩家：回到剧本库即可看到并开始游戏。后续想改，直接在这里说，改完重新发布即可。'
       + (previous ? '旧版已自动留档，剧本详情页可回滚。' : '')
       + (warnings.length
@@ -240,132 +246,60 @@ export function publishStory(config: Config, storyInput: unknown, opts?: { force
   }
 }
 
-export function apply(ctx: Context, config: Config) {
-  ctx.tools.register(defineTool({
-    name: 'list_stories',
-    description: '列出平台上已发布的全部剧本（id、标题、一句话简介）。玩家想改已有剧本却没说清是哪部时先用它。',
-    parameters: {},
-    output: {
-      schema: {
+/** 工坊对话的三件工具。只给工坊会话与修改对话，游戏会话永远拿不到。 */
+export function workshopTools(config: Config, onPublished?: (id: string) => void): AgentTool[] {
+  return [
+    {
+      def: toolDef('list_stories', '列出平台上已发布的全部剧本（id、标题、一句话简介）。玩家想改已有剧本却没说清是哪部时先用它。', {
         type: 'object',
-        additionalProperties: false,
-        properties: {
-          stories: {
-            type: 'array',
-            required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                id: { type: 'string', required: true },
-                title: { type: 'string', required: true },
-                tagline: { type: 'string', required: true },
-              },
-            },
-          },
-        },
-      },
-      render: (_args, value) => [{
-        type: 'text',
-        text: (value.stories as { id: string; title: string; tagline: string }[]).length === 0
-          ? '平台上还没有剧本。'
-          : (value.stories as { id: string; title: string; tagline: string }[])
-              .map(s => `- ${s.id}《${s.title}》——${s.tagline}`)
-              .join('\n'),
-      }],
-    },
-    isConcurrencySafe: () => true,
-    execute() {
-      return Promise.resolve({ stories: listStories(config.presetsRoot) })
-    },
-    presentCall: () => ({ card: 'generic', title: '查看剧本库', kind: 'other' }),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'read_story',
-    description: '读取某剧本的现行正式版全文（含 GM 侧暗线）。修改已有剧本前必须先读它——'
-      + '拿到全文后按玩家要求修改，再用 publish_story 同 id 发布即为覆盖更新。',
-    parameters: {
-      id: { type: 'string', required: true, description: '剧本 id（story-xxx）' },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          found: { type: 'boolean', required: true },
-          story: { type: 'object', additionalProperties: true, properties: {} },
-        },
-      },
-      // 全文直接给模型：修改剧本必须基于现行正式版原文
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.found
-          ? `现行正式版全文如下（改完用 publish_story 同 id 发布）：\n${JSON.stringify(value.story, null, 2)}`
-          : '没有这个剧本 id。先用 list_stories 看看现有剧本。',
-      }],
-    },
-    isConcurrencySafe: () => true,
-    execute(args) {
-      const story = readStory(config.presetsRoot, String(args.id ?? ''))
-      // story 来自 JSON.parse，天然是 JsonValue；TS 推不出，这里断言过桥
-      if (!story) return Promise.resolve({ found: false })
-      return Promise.resolve({ found: true, story: story as never })
-    },
-    presentCall: () => ({ card: 'generic', title: '载入剧本', kind: 'other' }),
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'publish_story',
-    description: '发布剧本：校验 story 对象，写入剧本库并编译成可玩的游戏。'
-      + '访谈内容全部确认后调用；校验失败会返回逐条错误，按错误修正后重新发布即可。'
-      + '同 id 重复发布是覆盖更新（剧本永远只有一个现行正式版；旧版自动留档，可在剧本详情页回滚）。'
-      + '覆盖发布有缩水防线：新版比现行版少了幕/锚点/人物/资源/规则或全文明显变短会被拦下——'
-      + '先逐项核对少掉的是不是玩家要求删的，确认无误才带 confirm_shrink: true 重发。',
-    parameters: {
-      story: {
-        type: 'object',
-        required: true,
-        additionalProperties: true,
-        description: '完整的 taleforge.story.v1 剧本对象',
         properties: {},
-      },
-      confirm_shrink: {
-        type: 'boolean',
-        description: '仅在缩水防线拦下、且已逐项确认删减确为玩家要求后传 true',
+      }),
+      run: () => {
+        const stories = listStories(config)
+        return Promise.resolve({
+          text: stories.length === 0
+            ? '平台上还没有剧本。'
+            : stories.map(s => `- ${s.id}《${s.title}》——${s.tagline}`).join('\n'),
+        })
       },
     },
-    output: {
-      // schema 是 additionalProperties: false：execute 返回的每一个键都要在这里声明，
-      // 漏一个（如写法体检的 warnings）整份输出会被 dsh 以 ToolOutputError 拒绝——
-      // 而剧本此时已经写盘编译完，GM 却收到"发布失败"，多半还会重发一遍。
-      schema: {
+    {
+      def: toolDef('read_story', '读取某剧本的现行正式版全文（含 GM 侧暗线）。修改已有剧本前必须先读它——'
+        + '拿到全文后按玩家要求修改，再用 publish_story 同 id 发布即为覆盖更新。', {
         type: 'object',
-        additionalProperties: false,
-        properties: {
-          ok: { type: 'boolean', required: true },
-          id: { type: 'string' },
-          title: { type: 'string' },
-          issues: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                path: { type: 'string', required: true },
-                message: { type: 'string', required: true },
-              },
-            },
-          },
-          warnings: { type: 'array', items: { type: 'string' } },
-          brief: { type: 'string', required: true },
-        },
+        properties: { id: { type: 'string', description: '剧本 id（story-xxx）' } },
+        required: ['id'],
+      }),
+      run: (args) => {
+        const story = readStory(config, String(args.id ?? ''))
+        // 全文直接给模型：修改剧本必须基于现行正式版原文
+        return Promise.resolve({
+          text: story
+            ? `现行正式版全文如下（改完用 publish_story 同 id 发布）：\n${JSON.stringify(story, null, 2)}`
+            : '没有这个剧本 id。先用 list_stories 看看现有剧本。',
+        })
       },
-      render: (_args, value) => [{ type: 'text', text: (value as { brief: string }).brief }],
     },
-    execute(args) {
-      return Promise.resolve(publishStory(config, args.story, { force: args.confirm_shrink === true }))
+    {
+      def: toolDef('publish_story', '发布剧本：校验 story 对象，写入剧本库，立即可玩。'
+        + '访谈内容全部确认后调用；校验失败会返回逐条错误，按错误修正后重新发布即可。'
+        + '同 id 重复发布是覆盖更新（剧本永远只有一个现行正式版；旧版自动留档，可在剧本详情页回滚）。'
+        + '覆盖发布有缩水防线：新版比现行版少了幕/锚点/人物/资源/规则或全文明显变短会被拦下——'
+        + '先逐项核对少掉的是不是玩家要求删的，确认无误才带 confirm_shrink: true 重发。', {
+        type: 'object',
+        properties: {
+          story: { type: 'object', description: '完整的 taleforge.story.v1.1 剧本对象' },
+          confirm_shrink: { type: 'boolean', description: '仅在缩水防线拦下、且已逐项确认删减确为玩家要求后传 true' },
+        },
+        required: ['story'],
+      }),
+      run: (args) => {
+        const result = publishStory(config, args.story, { force: args.confirm_shrink === true })
+        if (result.ok && result.id) onPublished?.(result.id)
+        const meta: Record<string, unknown> = { kind: 'workshop/publish', ok: result.ok }
+        if (result.id) meta.id = result.id
+        return Promise.resolve({ text: result.brief, meta })
+      },
     },
-    presentCall: () => ({ card: 'generic', title: '发布剧本', kind: 'other' }),
-  }))
+  ]
 }

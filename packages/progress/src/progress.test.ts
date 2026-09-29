@@ -4,9 +4,8 @@ import {
   applyReport,
   boundaryWarnings,
   effectiveActs,
-  foldEvents,
+  foldProgress,
   initialProgress,
-  reduceEvent,
   pressureOf,
   remainingAnchors,
   validateRevisions,
@@ -32,15 +31,9 @@ const acts: ActDef[] = [
   },
 ]
 
-const turnStart = { type: 'turn/start', data: {} }
-const report = (accepted: string[]) => ({
-  type: 'tool/result',
-  data: { meta: { kind: 'progress/report', accepted } },
-})
-const revise = (revisions: unknown[]) => ({
-  type: 'tool/result',
-  data: { meta: { kind: 'progress/revision', revisions } },
-})
+const turnStart = { kind: 'turn' } as const
+const report = (accepted: string[]) => ({ kind: 'report', accepted }) as const
+const revise = (revisions: unknown[]) => ({ kind: 'revision', revisions: revisions as never }) as const
 
 test('必需锚点未齐不转幕；齐了立即转幕', () => {
   let state = initialProgress()
@@ -80,28 +73,28 @@ test('提前上报后续幕、重复上报、未知锚点各按原因拒绝', ()
 test('压力分档按停滞回合数：<4 low，≥4 rising，≥8 high；进展即复位', () => {
   const events = [turnStart, report(['a1'])]
   for (let i = 0; i < 7; i++) events.push(turnStart, report([]))
-  let state = foldEvents(acts, events)
+  let state = foldProgress(acts, events)
   assert.equal(pressureOf(state).level, 'rising')
 
   events.push(turnStart, report([]))
-  state = foldEvents(acts, events)
+  state = foldProgress(acts, events)
   assert.equal(pressureOf(state).stalledTurns, 8)
   assert.equal(pressureOf(state).level, 'high')
 
   events.push(turnStart, report(['a2']))
-  state = foldEvents(acts, events)
+  state = foldProgress(acts, events)
   assert.equal(pressureOf(state).level, 'low', '锚点达成即复位')
 })
 
-test('折叠重放得到同一状态——fork 出的支线靠它重算', () => {
+test('折叠重放得到同一状态——重写回合截断日志后靠它重算', () => {
   const events = [
     turnStart, report(['a1']),
     turnStart, report([]),
     turnStart, report(['a2']),
     turnStart, report(['b1']),
   ]
-  const a = foldEvents(acts, events)
-  const b = foldEvents(acts, events)
+  const a = foldProgress(acts, events)
+  const b = foldProgress(acts, events)
   assert.deepEqual(a, b)
   assert.equal(a.phase, 'ended')
   assert.equal(a.turn, 4)
@@ -120,7 +113,7 @@ test('anchor 修订改写现行幕结构：增删改齐全，且只对折叠生�
   assert.equal(acts[0].anchors.length, 3, '种子不被修改')
 
   // 修订后：a4 是唯一必需锚点，达成即转幕
-  const state = foldEvents(acts, [revise(revisions as never), turnStart, report(['a4'])])
+  const state = foldProgress(acts, [revise(revisions as never), turnStart, report(['a4'])])
   assert.equal(state.actIndex, 1)
 })
 
@@ -175,7 +168,7 @@ test('数值定义修订校验：未知 id 拒绝、空字段拒绝、合法条�
   assert.equal(accepted.length, 2)
   assert.equal(rejected.length, 3)
   assert.deepEqual(accepted[0], { target: 'resource', id: 'hp', guidance: '新语义', max: 80 })
-  // dsh 无损 JSON 约束：未给的字段必须整个省略，不能是 undefined 键
+  // 未给的字段必须整个省略：日志里不出现 undefined 键
   for (const entry of accepted) {
     assert.ok(!Object.values(entry).includes(undefined), 'accepted 里不得携带 undefined 键')
   }
@@ -201,32 +194,10 @@ test('边界联动提醒：只改语义不动边界要警告，动了边界或�
   assert.deepEqual(none, [])
 })
 
-test('周期收支每回合只滚一次：同回合重复上报不重复结算', () => {
-  const acts = [{ id: 'a1', title: '一', objective: 'o', anchors: [{ id: 'x', text: 't', required: true }] }]
-  let state = initialProgress()
-  state = reduceEvent(state, { type: 'turn/start', data: {} }, acts)
-  assert.equal(state.turn, 1)
-  assert.equal(state.lastUpkeepTurn ?? 0, 0, '回合开始时还没滚过')
-
-  // 第一次上报：带 upkeepTurn，记下已滚
-  state = reduceEvent(state, {
-    type: 'tool/result',
-    data: { meta: { kind: 'progress/report', accepted: [], upkeepTurn: 1 } },
-  }, acts)
-  assert.equal(state.lastUpkeepTurn, 1)
-
-  // 同回合再上报一次（实测存在）：turn 没涨，工具那侧据此不再产出 upkeep
-  assert.equal(state.turn > (state.lastUpkeepTurn ?? 0), false, '同回合不该再滚')
-
-  // 下一回合开始，又该滚了
-  state = reduceEvent(state, { type: 'turn/start', data: {} }, acts)
-  assert.equal(state.turn > (state.lastUpkeepTurn ?? 0), true)
-})
-
 test('节奏容忍度由剧本按幕声明：慢热的幕不该被平台按默认阈值催', () => {
   const events = [turnStart, report(['a1'])]
   for (let i = 0; i < 8; i++) events.push(turnStart, report([]))
-  const state = foldEvents(acts, events)
+  const state = foldProgress(acts, events)
   assert.equal(pressureOf(state).stalledTurns, 8)
 
   // 平台缺省（4/8）：这时已经进高档，会要求"行动选项 A 必须是主线前进位"

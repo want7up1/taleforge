@@ -1,5 +1,5 @@
 /**
- * 判定的裁决——掷骰在工具执行时发生一次，结果落进 tool/result.meta 持久化；
+ * 判定的裁决——掷骰在工具执行时发生一次，结果落进 check/rolled 事件持久化；
  * 重放与 fork 读的是落账的结果，不重掷。resolve 是纯函数，掷骰由调用方注入。
  */
 import type { CheckOutcome, CheckResult, Die } from './types.ts'

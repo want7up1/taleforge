@@ -1,4 +1,4 @@
-/** 回顾页：完整对局记录。游玩屏只渲染最新一回合，往前翻到这里来。 */
+/** 回顾页：完整对局记录（只列正戏；场外往来在游玩屏的 GM 悬浮框里）。游玩屏只渲染最新一回合，往前翻到这里来。 */
 import { useEffect, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
@@ -38,7 +38,7 @@ export function History({ sessionId, story, onBack }: Props) {
 
       <div className="scroll">
         <div className="column">
-          {messages.map((m, i) => {
+          {messages.filter(m => m.kind !== 'offstage').map((m, i) => {
             if (m.role === 'user') {
               return (
                 <div key={m.seq ?? i} className="player-block">

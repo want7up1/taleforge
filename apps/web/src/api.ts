@@ -20,7 +20,7 @@ async function json<T>(resPromise: Promise<Response>): Promise<T> {
 
 export const api = {
   /** build 是前端 bundle 的文件名：服务端换版本时它会变，用来提示玩家刷新 */
-  health: () => json<{ ok: boolean; dsh: boolean; build?: string }>(fetch('/app/health')),
+  health: () => json<{ ok: boolean; engine?: boolean; llm?: boolean; build?: string }>(fetch('/app/health')),
 
   credentialStatus: () => json<CredentialStatus>(fetch('/app/settings/credentials')),
 
@@ -88,7 +88,7 @@ export const api = {
           hasMore: boolean
           projections?: ProjectionsBlock
           /** 未收尾回合的已产出部分：断点续传用 */
-          inflight?: { partial: string; lastChunkSeq: number; startedAt: number }
+          inflight?: { kind: 'play' | 'offstage' | 'agent'; partial: string; lastChunkSeq: number; startedAt: number; phase?: string }
         }>(
           fetch(`/app/sessions/${sessionId}/history`),
         )
@@ -112,7 +112,7 @@ export const api = {
   cancel: (sessionId: string) =>
     json<{ accepted: true }>(fetch(`/app/sessions/${sessionId}/cancel`, { method: 'POST' })),
 
-  /** 重写上一回合：fork 弃旧线重发同一输入，返回新会话 id */
+  /** 重写上一回合：截断日志重发同一输入（原稿归档），会话 id 不变 */
   retry: (sessionId: string) =>
     json<{ sessionId: string }>(fetch(`/app/sessions/${sessionId}/retry`, { method: 'POST' })),
 

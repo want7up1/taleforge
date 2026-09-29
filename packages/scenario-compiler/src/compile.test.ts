@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { MASKED_GLOBAL_TOOLS, applyRevisionsToStory, compileAll, compileScenario, compileWorkshopPreset, renderPersona, storySchema } from './index.ts'
+import { applyRevisionsToStory, renderPersona, scanCatalog, storySchema } from './index.ts'
 import { WORKSHOP_PERSONA } from './workshop.ts'
 
 const story = {
@@ -50,7 +50,7 @@ test('modules 可为空数组：只要底座结构保证，不含任何工艺模
   assert.doesNotMatch(persona, /工艺模块：标准叙事/)
   // 底座结构与输出契约仍然齐全
   assert.match(persona, /结构规则/)
-  assert.match(persona, /【行动】/)
+  assert.match(persona, /# 输出格式/)
   assert.match(persona, /【场外】/)
 })
 
@@ -101,125 +101,51 @@ test('声明哪个模块，persona 里就出现哪套工艺，不多不少', () 
     storySchema.parse({ ...story, craft: { modules: ['standard'], rules: [] } }),
   )
   assert.match(standard, /承接优先/)
-  assert.match(standard, /每回合 2–4 处/, '标记用法工艺随 standard 模块走')
+  assert.match(standard, /每章 2–4 处/, '标记用法工艺随 standard 模块走')
   assert.doesNotMatch(standard, /出手即碾压/)
 
   // 底座与输出契约不随选件变化
   for (const persona of [shuang, standard]) {
     assert.match(persona, /戏内铁律/)
     assert.match(persona, /场外协议/)
-    assert.match(persona, /【行动】/)
+    assert.match(persona, /不少于 2000 字/)
   }
 })
 
-test('锚点完成信号渲染进幕结构', () => {
-  const persona = renderPersona(storySchema.parse(story))
-  assert.match(persona, /完成信号：主角拿到了钥匙/)
+test('正文步的幕结构：当前幕写详细，其余只列标题；完成信号只归结算步', () => {
+  const three = storySchema.parse({
+    ...story,
+    acts: [
+      story.acts[0],
+      { id: 'act-2', title: '第二幕', objective: '第二幕的秘密目标', anchors: [{ id: 'b1', text: '第二幕锚点', required: true }] },
+      { id: 'act-3', title: '第三幕', objective: '第三幕目标', anchors: [{ id: 'c1', text: '终点', required: true }] },
+    ],
+  })
+  const atAct2 = renderPersona(three, { actIndex: 1 })
+  assert.match(atAct2, /第 1 幕《第一幕》（已完成）/)
+  assert.match(atAct2, /第 2 幕《第二幕》（当前）/)
+  assert.match(atAct2, /第二幕锚点/)
+  assert.match(atAct2, /第 3 幕《第三幕》（尚未开始/)
+  assert.doesNotMatch(atAct2, /第三幕目标|终点/, '未到的幕不给细节——写进上下文 GM 就会提前演')
+  assert.doesNotMatch(atAct2, /锚点一/, '已完成的幕不再占篇幅')
+  assert.doesNotMatch(renderPersona(storySchema.parse(story)), /完成信号/, '完成信号是结算步的对照物，正文步不背')
 })
 
-test('输出契约排在 persona 末尾，离生成点最近', () => {
-  const persona = renderPersona(storySchema.parse(story))
+test('幕结构随锚点修订渲染：传入现行幕结构就用它', () => {
+  const parsed = storySchema.parse(story)
+  const revised = [{ ...parsed.acts[0], anchors: [...parsed.acts[0].anchors, { id: 'a9', text: '场外新增的锚点', required: true }] }]
+  assert.match(renderPersona(parsed, { acts: revised }), /场外新增的锚点/)
+})
+
+test('输出契约排在固定前缀末尾，离后面的对话最近；正文里不再有行动块', () => {
+  const persona = renderPersona(storySchema.parse({ ...story, craft: { ...story.craft, exemplar: '范文'.repeat(120) } }))
   const contract = persona.indexOf('# 输出格式')
   assert.ok(contract > 0, '应存在输出格式契约')
-  // 契约必须排在剧本设定之后——早先它在最前面，模型写到结尾会漏掉行动块
-  for (const marker of ['## 世界', '## 出场人物', '## 幕结构', '## 开场']) {
+  for (const marker of ['## 世界', '## 出场人物', '## 幕结构', '## 开场', '# 文风范本']) {
     assert.ok(persona.indexOf(marker) < contract, `${marker} 应排在输出契约之前`)
   }
-  // 契约之后只允许开局指令
-  assert.match(persona.slice(contract), /# 开局/)
-})
-
-test('compileAll 回收源已删除的剧本，但不碰其他 preset', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const src = path.join(root, 'presets')
-    const out = path.join(root, 'out')
-    mkdirSync(path.join(src, 'a'), { recursive: true })
-    writeFileSync(path.join(src, 'a', 'story.json'), JSON.stringify(story))
-    mkdirSync(path.join(out, 'standard'), { recursive: true })   // 非本编译器产出，须保留
-
-    compileAll(src, out)
-    assert.ok(existsSync(path.join(out, 'story-test')))
-
-    rmSync(path.join(src, 'a'), { recursive: true })
-    const second = compileAll(src, out)
-
-    assert.ok(!existsSync(path.join(out, 'story-test')), '源已删除的剧本应被回收')
-    assert.ok(existsSync(path.join(out, 'standard')), '非 story- 前缀的 preset 不得删除')
-    assert.deepEqual(second.filter(r => r.removed).map(r => r.id), ['story-test'])
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('编译产出 preset 三件套且幂等', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const storyDir = path.join(root, 'src')
-    mkdirSync(storyDir)
-    writeFileSync(path.join(storyDir, 'story.json'), JSON.stringify(story))
-    const presetsRoot = path.join(root, 'presets')
-
-    const first = compileScenario(storyDir, presetsRoot)
-    const second = compileScenario(storyDir, presetsRoot)
-    assert.equal(first.presetDir, second.presetDir)
-
-    for (const file of ['preset.yml', 'agent.cordis.yml', 'story.json']) {
-      assert.ok(existsSync(path.join(first.presetDir, file)), `缺少 ${file}`)
-    }
-
-    const composition = readFileSync(path.join(first.presetDir, 'agent.cordis.yml'), 'utf8')
-    assert.match(composition, /dsh-persona/)
-    assert.match(composition, /complete: true/)
-    assert.match(composition, /【行动】/)
-    assert.match(composition, /测试剧本/)
-    assert.doesNotMatch(composition, /dsh-tool-bash/)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('传入插件入口时：进度引擎一律挂载，机制引擎只在声明 mechanics 时挂载', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const storyDir = path.join(root, 'src')
-    mkdirSync(storyDir)
-    writeFileSync(path.join(storyDir, 'story.json'), JSON.stringify(story))
-    const entries = { mechanics: '/abs/mechanics.ts', progress: '/abs/progress.ts' }
-
-    // 纯叙事剧本（无 mechanics 段）：只有进度引擎
-    const pure = compileScenario(storyDir, path.join(root, 'p1'), entries)
-    const pureYml = readFileSync(path.join(pure.presetDir, 'agent.cordis.yml'), 'utf8')
-    assert.match(pureYml, /\/abs\/progress\.ts/)
-    assert.match(pureYml, /act-1/, '进度引擎配置应带幕结构种子')
-    assert.doesNotMatch(pureYml, /\/abs\/mechanics\.ts/)
-
-    // 带机制的剧本：两个都挂
-    writeFileSync(path.join(storyDir, 'story.json'), JSON.stringify({
-      ...story,
-      mechanics: {
-        resources: [{
-          id: 'hp', label: '体力', group: 'self', min: 0, max: 100, initial: 80, maxStep: 20, guidance: '战斗扣，休息回',
-        }],
-      },
-    }))
-    const rich = compileScenario(storyDir, path.join(root, 'p2'), entries)
-    const richYml = readFileSync(path.join(rich.presetDir, 'agent.cordis.yml'), 'utf8')
-    assert.match(richYml, /\/abs\/progress\.ts/)
-    assert.match(richYml, /\/abs\/mechanics\.ts/)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('回合固定流程紧随剧本数据、位于输出契约之前，终幕规则齐备', () => {
-  const persona = renderPersona(storySchema.parse(story))
-  const flow = persona.indexOf('# 回合固定流程')
-  const contract = persona.indexOf('# 输出格式')
-  assert.ok(flow > 0 && flow < contract, '固定流程应在输出契约之前')
-  assert.match(persona, /report_progress/)
-  assert.match(persona, /——剧终——/)
-  assert.match(persona, /revise_setting/)
+  assert.match(persona.slice(contract), /不写【行动】块/, '选项由结算步结构化产出')
+  assert.match(persona.slice(contract), /——剧终——/)
 })
 
 test('显示选位与分组标题：display 三值合法、hidden 在 persona 里标注、groups 可自定义', () => {
@@ -236,27 +162,26 @@ test('显示选位与分组标题：display 三值合法、hidden 在 persona �
   assert.equal(withDisplay.mechanics?.resources?.[1].display, 'hidden')
   assert.equal(withDisplay.mechanics?.groups?.affinity, '红颜')
   const persona = renderPersona(withDisplay)
-  assert.match(persona, /此条对玩家隐藏/)
+  assert.match(persona, /资源（欲望）/, '隐藏条目不列进正文步的面板清单')
   assert.throws(() => storySchema.parse({
     ...story,
     mechanics: { resources: [{ id: 'x', label: 'x', group: 'self', min: 0, max: 1, initial: 0, maxStep: 1, guidance: 'x', display: 'popup' }] },
   }), '未知位置必须被拒绝')
 })
 
-test('双源根：后者同 id 覆盖前者（数据卷压过仓库种子），并集之外的才回收', () => {
+test('剧本目录双源根：后者同 id 覆盖前者（数据卷压过仓库种子）', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
   try {
     const repo = path.join(root, 'repo')
     const data = path.join(root, 'data')
-    const out = path.join(root, 'out')
     mkdirSync(path.join(repo, 'a'), { recursive: true })
     writeFileSync(path.join(repo, 'a', 'story.json'), JSON.stringify({ ...story, tagline: '种子版' }))
     mkdirSync(path.join(data, 'a2'), { recursive: true })
     writeFileSync(path.join(data, 'a2', 'story.json'), JSON.stringify({ ...story, tagline: '落盘修订版' }))
-
-    compileAll([repo, data], out)
-    const compiledStory = JSON.parse(readFileSync(path.join(out, 'story-test', 'story.json'), 'utf8'))
-    assert.equal(compiledStory.tagline, '落盘修订版', '数据根应覆盖仓库同 id 剧本')
+    const entries = scanCatalog([repo, data])
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].story?.tagline, '落盘修订版', '数据根应覆盖仓库同 id 剧本')
+    assert.equal(entries[0].dir, path.join(data, 'a2'))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -289,21 +214,6 @@ test('修订落盘合并：各目标类型落对位置，产物仍过 schema', (
   assert.equal(source.world.overview.includes('天空'), false, '输入不被修改')
 })
 
-test('工坊 preset 生成：persona 完整、挂发布插件、不带 story- 前缀', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    compileWorkshopPreset(root, { workshopEntry: '/abs/workshop.ts', scenariosRoot: '/data/scenarios' })
-    const yml = readFileSync(path.join(root, 'workshop', 'agent.cordis.yml'), 'utf8')
-    assert.match(yml, /dsh-persona/)
-    assert.match(yml, /publish_story/)
-    assert.match(yml, /\/abs\/workshop\.ts/)
-    assert.match(yml, /完成信号/)
-    assert.match(yml, /机械规则，不写判断规则/)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
 test('progression：需同时声明 attributes、阈值必须严格递增', () => {
   const attrs = [{ id: 'str', label: '力量', initial: 3, guidance: 'x' }]
   const prog = { guidance: '击杀 +10', maxStep: 40, thresholds: [40, 100], pointsPerLevel: 2 }
@@ -316,25 +226,6 @@ test('progression：需同时声明 attributes、阈值必须严格递增', () =
   assert.equal(ok.mechanics?.progression?.label, '经验', 'label 缺省为经验')
 })
 
-test('progression 进 persona：经验等级段、固定流程里 grant_xp 必调与【加点】先落账', () => {
-  const parsed = storySchema.parse({
-    ...story,
-    mechanics: {
-      attributes: [{ id: 'str', label: '力量', initial: 3, guidance: 'x' }],
-      progression: { label: '进化点', guidance: '吞噬晶核 +20', maxStep: 40, thresholds: [40, 100], pointsPerLevel: 2, display: 'panel' },
-    },
-  })
-  const persona = renderPersona(parsed)
-  assert.match(persona, /## 经验与等级（进化点）/)
-  assert.match(persona, /吞噬晶核 \+20/)
-  assert.match(persona, /2 级需累计 40、3 级需累计 100，满级 3 级/)
-  assert.match(persona, /`grant_xp` 每个正戏回合必调（没有传 0）/)
-  assert.match(persona, /【加点】时第一件事先 `spend_points`/)
-  assert.match(persona, /属性主要靠玩家用属性点加点成长/)
-  // 没声明就一个字都不出现
-  assert.doesNotMatch(renderPersona(storySchema.parse(story)), /grant_xp|经验与等级/)
-})
-
 test('资源 id 接受 kebab-case（首段可含连字符），冒号命名空间仍可用', () => {
   const res = (id: string) => ({ id, label: 'x', group: 'self', min: 0, max: 10, initial: 0, maxStep: 1, guidance: 'x' })
   const ok = storySchema.parse({ ...story, mechanics: { resources: [res('desire-jiangtang'), res('affinity:suwan'), res('evolution')] } })
@@ -343,7 +234,7 @@ test('资源 id 接受 kebab-case（首段可含连字符），冒号命名空�
   assert.throws(() => storySchema.parse({ ...story, mechanics: { resources: [res('a:b:c')] } }))
 })
 
-test('progression：levelNames 长度必须等于阈值数+1；bonusPointsMax 缺省 0；persona 带级名与奖励点规则', () => {
+test('progression：levelNames 长度必须等于阈值数+1；bonusPointsMax 缺省 0', () => {
   const attrs = [{ id: 'str', label: '力量', initial: 3, guidance: 'x' }]
   const base = { guidance: 'x', maxStep: 3, thresholds: [6, 16], pointsPerLevel: 2 }
   assert.throws(
@@ -352,84 +243,6 @@ test('progression：levelNames 长度必须等于阈值数+1；bonusPointsMax �
   )
   const plain = storySchema.parse({ ...story, mechanics: { attributes: attrs, progression: base } })
   assert.equal(plain.mechanics?.progression?.bonusPointsMax, 0)
-  assert.doesNotMatch(renderPersona(plain), /剧情奖励属性点/)
-  const rich = storySchema.parse({
-    ...story,
-    mechanics: { attributes: attrs, progression: { ...base, levelNames: ['C', 'B', 'A'], bonusPointsMax: 5 } },
-  })
-  const persona = renderPersona(rich)
-  assert.match(persona, /各级名称 C\/B\/A；B（2 级）需累计 6、A（3 级）需累计 16，满级 3 级=A/)
-  assert.match(persona, /剧情奖励属性点.*points.*单次最多 5/)
-})
-
-test('工具遮罩进玩家与工坊 preset：挡掉 profile 层插件漏进来的全局工具（护栏 4）', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const src = path.join(root, 'src')
-    const out = path.join(root, 'out')
-    mkdirSync(src, { recursive: true })
-    writeFileSync(path.join(src, 'story.json'), JSON.stringify(story))
-    const entries = { toolMask: '/abs/tool-mask.ts', progress: '/abs/progress.ts' }
-
-    compileScenario(src, out, entries)
-    const composition = readFileSync(path.join(out, 'story-test', 'agent.cordis.yml'), 'utf8')
-    assert.match(composition, /id: tool-mask/)
-    for (const tool of MASKED_GLOBAL_TOOLS) {
-      assert.ok(composition.includes(tool), `玩家 preset 应挡掉 ${tool}`)
-    }
-    // 遮罩必须排在平台自己的插件之前，先挡再挂
-    assert.ok(
-      composition.indexOf('id: tool-mask') < composition.indexOf('id: progress'),
-      '遮罩应排在其他插件之前',
-    )
-
-    compileWorkshopPreset(out, { workshopEntry: '/abs/workshop.ts', scenariosRoot: src, entries })
-    const workshop = readFileSync(path.join(out, 'workshop', 'agent.cordis.yml'), 'utf8')
-    assert.match(workshop, /id: tool-mask/, '工坊 preset 同样要挡')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('没有 toolMask 入口时不写遮罩条目：同一份编译器在未装插件的环境照常工作', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const src = path.join(root, 'src')
-    const out = path.join(root, 'out')
-    mkdirSync(src, { recursive: true })
-    writeFileSync(path.join(src, 'story.json'), JSON.stringify(story))
-
-    compileScenario(src, out, { progress: '/abs/progress.ts' })
-    const composition = readFileSync(path.join(out, 'story-test', 'agent.cordis.yml'), 'utf8')
-    assert.ok(!composition.includes('tool-mask'))
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('投影 key 按剧本分片：每部剧本的机制与进度都带自己的 scope', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
-  try {
-    const src = path.join(root, 'src')
-    const out = path.join(root, 'out')
-    mkdirSync(src, { recursive: true })
-    writeFileSync(path.join(src, 'story.json'), JSON.stringify({
-      ...story,
-      mechanics: {
-        resources: [{
-          id: 'hp', label: '体力', group: 'self',
-          min: 0, max: 100, initial: 50, maxStep: 10, guidance: '说明',
-        }],
-      },
-    }))
-    compileScenario(src, out, { progress: '/abs/p.ts', mechanics: '/abs/m.ts' })
-    const yml = readFileSync(path.join(out, 'story-test', 'agent.cordis.yml'), 'utf8')
-    // dsh 的投影 registry 全局按 key 唯一、同 key 共享一个 unit（它假定同构）；
-    // 各剧本的 defs 并不同构，没有 scope 就会串剧本——实测出现过 A 剧本的会话拿到 B 剧本的面板
-    assert.equal((yml.match(/scope: story-test/g) ?? []).length, 2, '机制与进度各带一个 scope')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
 })
 
 test('standard 模块带着"文字代画面"的三条：定镜、连续场景、数值写成动作', () => {
@@ -444,52 +257,40 @@ test('standard 模块带着"文字代画面"的三条：定镜、连续场景、
 })
 
 /**
- * 坏源隔离：compileAll 跑在 BFF 的启动路径上（模块顶层），一个剧本抛异常就是
- * 进程退出 + 容器无限重启，连进 WebUI 删掉它都做不到，只能上服务器手删。
- * 所以坏的必须跳过、好的照常编译，且坏剧本的既有产出不得被当成"源已删除"回收。
+ * 坏源隔离：目录扫描跑在 BFF 的启动路径上，一个剧本抛异常就是进程退出 + 容器无限重启，
+ * 连进 WebUI 删掉它都做不到。所以坏的必须跳过、好的照常上架；坏剧本有留档就退回最近一份，
+ * 玩家还能在详情页看到它、回滚或删除。
  */
-test('坏剧本不拖垮整批编译：好的照常上架，坏的跳过且旧产出保留', () => {
+test('坏剧本不拖垮整批：好的照常上架，坏的退回最近留档并标注原因', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
   try {
     const src = path.join(root, 'scenarios')
-    const out = path.join(root, 'out')
-    // 两部剧本先都好好编译一遍（"bad" 目录名排在 "good" 前面，验证坏的不会挡住后面的）
-    mkdirSync(path.join(src, 'bad'), { recursive: true })
+    mkdirSync(path.join(src, 'bad', 'versions'), { recursive: true })
     mkdirSync(path.join(src, 'good'), { recursive: true })
-    writeFileSync(path.join(src, 'bad', 'story.json'), JSON.stringify({ ...story, id: 'story-bad' }))
-    writeFileSync(path.join(src, 'good', 'story.json'), JSON.stringify({ ...story, id: 'story-good' }))
-    compileAll(src, out)
-    assert.ok(existsSync(path.join(out, 'story-bad', 'agent.cordis.yml')))
-
-    // 一部剧本的源坏掉：schema 不再通过（id 还在，够抢救）
+    writeFileSync(path.join(src, 'bad', 'versions', 'v-100.json'), JSON.stringify({ ...story, id: 'story-bad', title: '旧版' }))
     writeFileSync(path.join(src, 'bad', 'story.json'), JSON.stringify({ ...story, id: 'story-bad', title: undefined }))
-    const results = compileAll(src, out)
-
-    assert.deepEqual(results.filter(r => !r.failed && !r.removed).map(r => r.id), ['story-good'], '好剧本照常编译')
-    const failed = results.filter(r => r.failed)
-    assert.deepEqual(failed.map(r => r.id), ['story-bad'])
-    assert.match(failed[0].failed!, /title/, '失败原因要能指到具体字段')
-    assert.ok(existsSync(path.join(out, 'story-bad', 'agent.cordis.yml')), '坏源的既有产出不得被回收')
-    assert.ok(existsSync(path.join(out, 'story-good', 'agent.cordis.yml')))
+    writeFileSync(path.join(src, 'good', 'story.json'), JSON.stringify({ ...story, id: 'story-good' }))
+    const entries = scanCatalog([src])
+    const bad = entries.find(e => e.id === 'story-bad')!
+    assert.match(bad.failed!, /title/, '失败原因要能指到具体字段')
+    assert.equal(bad.degraded, true)
+    assert.equal(bad.story?.title, '旧版')
+    assert.equal(entries.find(e => e.id === 'story-good')?.story?.title, '测试剧本')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })
 
-test('源文件 JSON 都坏了（写盘中断）：照样不崩，按目录名认领旧产出', () => {
+test('源文件 JSON 都坏了（写盘中断）且没有留档：照样不崩，按目录名认领、不上架', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'taleforge-'))
   try {
     const src = path.join(root, 'scenarios')
-    const out = path.join(root, 'out')
     mkdirSync(path.join(src, 'half'), { recursive: true })
-    writeFileSync(path.join(src, 'half', 'story.json'), JSON.stringify({ ...story, id: 'story-half' }))
-    compileAll(src, out)
-
     writeFileSync(path.join(src, 'half', 'story.json'), '{"format":"taleforge.story.v1","id":"story-h')
-    const results = compileAll(src, out)
-
-    assert.equal(results.filter(r => r.failed).length, 1)
-    assert.ok(existsSync(path.join(out, 'story-half', 'agent.cordis.yml')), '截断的源不得让旧产出被回收')
+    const [entry] = scanCatalog([src])
+    assert.equal(entry.id, 'story-half')
+    assert.ok(entry.failed)
+    assert.equal(entry.story, undefined)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -518,6 +319,10 @@ test('货架上新的三处声明面同步：craft/mechanics 的每个字段都�
   const fields = [
     ...Object.keys(shape.craft.shape).map(k => `craft.${k}`),
     ...Object.keys(shape.mechanics.unwrap().shape).map(k => `mechanics.${k}`),
+    // v1.1 在其他段落上新的字段，同样要写进两处
+    'opening.chapter',
+    'cast.voice',
+    'story.lore',
   ]
   assert.ok(fields.length >= 10, '内省没拿到字段，检查已失效（zod 换版本了？）')
 
@@ -531,21 +336,9 @@ test('货架上新的三处声明面同步：craft/mechanics 的每个字段都�
   assert.deepEqual(missing, [], `新字段没写进面向作者的文档，作者与工坊都不会知道它存在：\n${missing.join('\n')}`)
 })
 
-test('行动选项数由剧本声明：输出契约按它生成，缺省仍是四个', () => {
-  const four = renderPersona(storySchema.parse(story))
-  assert.match(four, /紧接着四行行动选项/)
-  assert.match(four, /^D\. /m)
-
-  const three = renderPersona(storySchema.parse({
-    ...story,
-    craft: { ...story.craft, action_options: 3 },
-  }))
-  assert.match(three, /紧接着三行行动选项/)
-  assert.match(three, /^C\. /m)
-  assert.doesNotMatch(three, /^D\. /m, '声明三个就不该出现 D')
-  assert.match(three, /三个选项各占一行/)
-
-  // 上限仍是 4：E 键留给自由输入
+test('行动选项数的边界：2–4，E 键留给自由输入', () => {
+  assert.equal(storySchema.parse(story).craft.action_options, 4)
+  assert.equal(storySchema.parse({ ...story, craft: { ...story.craft, action_options: 3 } }).craft.action_options, 3)
   assert.throws(() => storySchema.parse({ ...story, craft: { ...story.craft, action_options: 5 } }))
   assert.throws(() => storySchema.parse({ ...story, craft: { ...story.craft, action_options: 1 } }))
 })
@@ -585,4 +378,41 @@ test('周期收支的 id 必须是已声明的资源：写错不该静默不结�
   assert.equal(typo.success, false)
   assert.match(typo.error!.issues[0].message, /grian/, '要指名是哪个 id 写错了')
   assert.deepEqual(typo.error!.issues[0].path, ['mechanics', 'upkeep', 0, 'id'])
+})
+
+test('v1.1 新字段：全部可选，旧剧本照样有效；各自有长度边界', () => {
+  assert.equal(storySchema.safeParse(story).success, true, 'v1 剧本不改一个字仍然有效')
+  const rich = storySchema.parse({
+    ...story,
+    format: 'taleforge.story.v1.1',
+    opening: { ...story.opening, chapter: '开场'.repeat(150) },
+    cast: [{ id: 'su', name: '苏晚', identity: '医生', voice: ['“别动，我看看。”', '“你又逞强。”'] }],
+    craft: { ...story.craft, exemplar: '范文'.repeat(150) },
+    lore: [{ id: 'jingzhou', title: '荆州', triggers: ['荆州', '荆城'], text: '荆州是……' }],
+  })
+  assert.equal(rich.lore?.length, 1)
+  assert.throws(() => storySchema.parse({ ...story, cast: [{ id: 'su', name: '苏', identity: 'x', voice: ['一句'] }] }), '口吻至少两句')
+  assert.throws(() => storySchema.parse({ ...story, opening: { ...story.opening, chapter: '太短' } }))
+  const dup = storySchema.safeParse({
+    ...story,
+    lore: [
+      { id: 'x', title: 'a', triggers: ['a'], text: 't' },
+      { id: 'x', title: 'b', triggers: ['b'], text: 't' },
+    ],
+  })
+  assert.equal(dup.success, false)
+  assert.match(dup.error!.issues[0].message, /重复/)
+})
+
+test('v1.1 新字段进固定前缀：口吻样例带"不照抄"、开场章与范文进文风范本', () => {
+  const persona = renderPersona(storySchema.parse({
+    ...story,
+    opening: { ...story.opening, chapter: '雨下了一整夜。'.repeat(40) },
+    cast: [{ id: 'su', name: '苏晚', identity: '医生', voice: ['别动，我看看。', '你又逞强。'] }],
+    craft: { ...story.craft, exemplar: '风从北边来。'.repeat(50) },
+  }))
+  assert.match(persona, /口吻：「别动，我看看。」 「你又逞强。」/)
+  assert.match(persona, /不原句照搬/)
+  assert.match(persona, /# 文风范本[\s\S]*雨下了一整夜[\s\S]*风从北边来/)
+  assert.doesNotMatch(renderPersona(storySchema.parse(story)), /# 文风范本/, '没声明就不出现')
 })

@@ -1,5 +1,5 @@
 {
-  "name": "@taleforge/tool-mask",
+  "name": "@taleforge/engine",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -10,8 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.7"
+    "@taleforge/llm": "workspace:*",
+    "@taleforge/mechanics": "workspace:*",
+    "@taleforge/progress": "workspace:*",
+    "@taleforge/scenario-compiler": "workspace:*",
+    "@taleforge/store": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyChanges, foldApplied, foldNumericEvents, initialState } from './resources.ts'
+import { applyChanges, effectiveNumericDefs, foldApplied, initialState } from './resources.ts'
+import { dueUpkeep } from './types.ts'
 import type { ResourceDef } from './types.ts'
 
 const defs: ResourceDef[] = [
@@ -65,49 +66,26 @@ test('折叠重放得到同一状态——fork 出的支线靠它重算', () => 
   assert.equal(step2.state['affinity:suwan'].last?.reason, '替她挡下一击')
 })
 
-/** 造一条 report_progress 落下的 meta 事件（形状由 progress 包定，跨包契约测试锁在 contract.test.ts）。 */
-const upkeepEvent = (upkeep: { id: string; delta: number; reason: string; activeAbove?: number }[]) => ({
-  type: 'tool/result',
-  data: { meta: { kind: 'progress/report', accepted: [], upkeep, upkeepTurn: 1 } },
-})
-
-test('周期收支：走真的折叠路径，activeAbove 与上下限都在里面裁', () => {
-  const grain = { id: 'grain', label: '口粮', group: 'self' as const, min: 0, max: 100, initial: 20, maxStep: 50, guidance: 'g' }
-  const crop = { id: 'crop', label: '麦苗', group: 'self' as const, min: 0, max: 3, initial: 0, maxStep: 5, guidance: 'g' }
+test('周期收支：activeAbove 过线才滚，增减照样过单步与值域裁决', () => {
+  const grain = { id: 'grain', label: '口粮', group: 'self' as const, min: 0, max: 100, initial: 5, maxStep: 50 }
+  const crop = { id: 'crop', label: '麦苗', group: 'self' as const, min: 0, max: 3, initial: 0, maxStep: 5 }
   const upkeep = [
     { id: 'grain', delta: -10, reason: '日耗' },
-    // activeAbove：没种下（0）就不长
     { id: 'crop', delta: 1, reason: '抽穗', activeAbove: 0 },
   ]
-
-  const one = foldNumericEvents([grain, crop], [upkeepEvent(upkeep)], 'resource')
-  assert.equal(one.values.grain.value, 10)
-  assert.equal(one.values.crop.value, 0, '麦苗未种下不该滚')
-
-  // 种下之后（值 > 0）才开始长；口粮见底但不为负，麦苗到上限就停
-  const sown = [
-    upkeepEvent(upkeep),
-    { type: 'tool/result', data: { meta: { kind: 'mechanics/resources', changes: [{ id: 'crop', delta: 1, reason: '播种', applied: 1, before: 0, after: 1, clamped: false }] } } },
-    upkeepEvent(upkeep),
-    upkeepEvent(upkeep),
-    upkeepEvent(upkeep),
-  ]
-  const grown = foldNumericEvents([grain, crop], sown, 'resource')
-  assert.equal(grown.values.crop.value, 3, '种下后每回合 +1，到上限停住')
-  assert.equal(grown.values.grain.value, 0, '口粮见底但不为负')
+  const s0 = initialState([grain, crop])
+  const due0 = dueUpkeep(s0, upkeep)
+  assert.deepEqual(due0.map(u => u.id), ['grain'], '没种下的麦苗不长')
+  const r0 = applyChanges(s0, [grain, crop], due0)
+  assert.equal(r0.state.grain.value, 0, '口粮见底停在下限')
+  const planted = applyChanges(r0.state, [grain, crop], [{ id: 'crop', delta: 1, reason: '播种' }]).state
+  const r1 = applyChanges(planted, [grain, crop], dueUpkeep(planted, upkeep))
+  assert.equal(r1.state.crop.value, 2)
 })
 
-test('周期收支按"当时的定义"结算：中途改了边界，只影响之后的回合', () => {
-  const grain = { id: 'grain', label: '口粮', group: 'self' as const, min: 0, max: 100, initial: 50, maxStep: 10, guidance: 'g' }
-  const rolls = [
-    upkeepEvent([{ id: 'grain', delta: -30, reason: '日耗' }]),
-    // 场外把单步上限放开
-    { type: 'tool/result', data: { meta: { kind: 'progress/revision', revisions: [{ target: 'resource', id: 'grain', maxStep: 50 }] } } },
-    upkeepEvent([{ id: 'grain', delta: -30, reason: '日耗' }]),
-  ]
-
-  const { values } = foldNumericEvents([grain], rolls, 'resource')
-  // 第一次按旧上限只扣得动 10（50→40），修订之后才扣得满 30（40→10）。
-  // 若拿"最终定义"重放全部历史（工具侧曾经的做法），两次都按 50 裁，会得出 0——那正是分叉。
-  assert.equal(values.grain.value, 10)
+test('修订改边界只对之后的裁决生效：种子不动', () => {
+  const seed = [{ id: 'stamina', min: 0, max: 100, initial: 50, maxStep: 10 }]
+  const revised = effectiveNumericDefs(seed, [{ target: 'resource', id: 'stamina', maxStep: 60 }], 'resource')
+  assert.equal(seed[0].maxStep, 10)
+  assert.equal(applyChanges({ stamina: { value: 40 } }, revised, [{ id: 'stamina', delta: 55, reason: '双修回满' }]).state.stamina.value, 95)
 })

@@ -33,7 +33,7 @@ if (!parsed.success) {
 const s = parsed.data
 const anchors = s.acts.flatMap(a => a.anchors)
 const noSignal = anchors.filter(a => a.required && !a.signal)
-console.log(`✓ 《${s.title}》（${s.id}）通过 taleforge.story.v1 校验`)
+console.log(`✓ 《${s.title}》（${s.id}）通过 ${s.format} 校验`)
 console.log(`  幕 ${s.acts.length} · 锚点 ${anchors.length}（必需 ${anchors.filter(a => a.required).length}）· 人物 ${s.cast.length} · 工艺 [${s.craft.modules.join(', ')}]${s.craft.rules.length ? ` + ${s.craft.rules.length} 条专属规则` : ''}`)
 if (s.mechanics) {
   const m = s.mechanics
@@ -45,6 +45,13 @@ if (s.mechanics) {
     m.progression && `经验等级(满级 ${m.progression.thresholds.length + 1}，每级 ${m.progression.pointsPerLevel} 点)`,
   ].filter(Boolean).join('、')}`)
 }
+const extras = [
+  s.opening.chapter && `手写开场章 ${s.opening.chapter.length} 字`,
+  s.craft.exemplar && `范文 ${s.craft.exemplar.length} 字`,
+  s.cast.some(c => c.voice?.length) && `口吻样例 ${s.cast.filter(c => c.voice?.length).length} 人`,
+  s.lore?.length && `设定条目 ${s.lore.length} 条`,
+].filter(Boolean)
+if (extras.length) console.log(`  v1.1：${extras.join('、')}`)
 // 品质提示（不算错误）：必需锚点缺完成信号是卡幕/跳幕的头号来源
 if (noSignal.length) {
   console.log(`  ⚠ ${noSignal.length} 个必需锚点没写完成信号（${noSignal.map(a => a.id).join(', ')}）——强烈建议补上`)

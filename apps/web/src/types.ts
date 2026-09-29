@@ -1,4 +1,4 @@
-/** 与 BFF/dsh 交互的最小类型面（形状依据 dsh apiproxy 契约，只声明本端用到的字段）。 */
+/** 与 BFF 交互的最小类型面（形状依据 packages/engine 的事件与视图，只声明本端用到的字段）。 */
 
 export interface SessionSummary {
   sessionId: string
@@ -26,7 +26,7 @@ export interface StoryAct {
   anchors: { id: string; text: string; required: boolean }[]
 }
 
-/** 剧本的玩家可见信息（BFF 已剥掉隐藏真相与人物暗线）。 */
+/** 剧本的玩家可见信息（BFF 已剥掉隐藏真相、人物暗线与设定条目）。 */
 export interface StoryDetail {
   id: string
   title: string
@@ -94,7 +94,7 @@ export interface MechanicsSnapshot {
   groups?: Partial<Record<ResourceDef['group'], string>>
 }
 
-/** tool/result.meta 里的一次结算（资源与属性同构） */
+/** 结算回执里的一次数值变化（资源与属性同构） */
 export interface MechanicsChange {
   id: string
   applied: number
@@ -115,7 +115,7 @@ export interface InventorySnapshot {
   items: { id: string; name: string; qty: number; note?: string }[]
 }
 
-/** tool/result.meta 里的一次物品变动 */
+/** 结算回执里的一次物品变动 */
 export interface InventoryChange {
   op: string
   id: string
@@ -144,7 +144,7 @@ export interface ProgressionSnapshot {
   display?: 'strip' | 'panel'
 }
 
-/** tool/result.meta 里的一次经验结算（含升级发点与剧情奖励点） */
+/** 结算回执里的一次经验结算（含升级发点与剧情奖励点） */
 export interface XpMeta {
   applied: number
   before: number
@@ -158,7 +158,7 @@ export interface XpMeta {
   bonusPoints?: number
 }
 
-/** tool/result.meta 里的一次判定裁决 */
+/** check/rolled 事件：一次判定裁决 */
 export interface CheckMeta {
   die: string
   roll: number
@@ -175,6 +175,8 @@ export interface SessionStats {
   turns: number
   llmMs: number
   decodeTokens: number
+  promptTokens?: number
+  cacheHitTokens?: number
 }
 
 export interface ProgressAnchor {
@@ -200,13 +202,14 @@ export interface ProgressRevision {
   guidance?: string
 }
 
-/** progress projection 的载荷：现行幕结构（含修订）、达成、压力、终局态 */
+/** progress 视图：现行幕结构（含修订）、达成、压力、终局态 */
 export interface ProgressSnapshot {
   acts: ProgressAct[]
   actIndex: number
   achieved: string[]
   turn: number
-  phase: 'playing' | 'ended'
+  /** finale：主线已齐、结局章还没写（玩家还要选最后一步）；ended：剧终 */
+  phase: 'playing' | 'finale' | 'ended'
   pressure: { level: 'low' | 'rising' | 'high'; stalledTurns: number }
   revisions: ProgressRevision[]
 }
@@ -231,43 +234,62 @@ export interface ContentBlock {
   [key: string]: unknown
 }
 
+/** 会话日志里的一条事件（信封 {type, seq, time, data}；BFF 已剥掉剧本快照与推理文本） */
 export interface SessionEvent {
   type: string
   seq: number
   time: number
-  data: Record<string, unknown> & {
-    chunk?: { type: string; text?: string; index?: number }
-    message?: { role?: string; content?: ContentBlock[] }
-    content?: ContentBlock[]
-  }
+  data: Record<string, unknown>
+}
+
+/** settlement 事件的回执：这一章结出了什么（数值、物品、经验、锚点）与下一步选项 */
+export interface SettlementReceipt {
+  anchors: { accepted: string[]; ignored: { id: string; reason: string }[] }
+  upkeep: MechanicsChange[]
+  resources: MechanicsChange[]
+  attributes: MechanicsChange[]
+  inventory: InventoryChange[]
+  xp?: XpMeta
+  options: string[]
+  rejected: string[]
+  advancedTo?: number
+  ended: boolean
 }
 
 export interface HistoryEntry {
   event: SessionEvent
 }
 
-/** 历史尾页附带的投影基线，用来在打开存档时立刻还原当前数值 */
-export interface ProjectionsBlock {
-  asOfSeq: number
-  values: {
-    mechanics?: MechanicsSnapshot | null
-    attributes?: AttributesSnapshot | null
-    inventory?: InventorySnapshot | null
-    progress?: ProgressSnapshot | null
-    progression?: ProgressionSnapshot | null
-    sessionStats?: SessionStats
-  }
+/** 会话视图（面板与进度）：打开存档时立刻还原，之后随 state 帧更新 */
+export interface SessionValues {
+  title?: string
+  model?: { model: string; effort: string }
+  mechanics?: MechanicsSnapshot | null
+  attributes?: AttributesSnapshot | null
+  inventory?: InventorySnapshot | null
+  progress?: ProgressSnapshot | null
+  progression?: ProgressionSnapshot | null
+  sessionStats?: SessionStats
 }
 
-export interface MuxFrame {
-  type: string
-  sessionId?: string
-  event?: SessionEvent
-  [key: string]: unknown
+/** 历史尾页附带的视图基线 */
+export interface ProjectionsBlock {
+  asOfSeq: number
+  values: SessionValues
 }
+
+/** SSE 帧：持久事件、正文增量、阶段、视图快照、日志被截断（重写回合）后的重置 */
+export type StreamFrame =
+  | { type: 'event'; event: SessionEvent }
+  | { type: 'delta'; seq: number; channel: 'text'; text: string }
+  | { type: 'phase'; seq: number; phase: string }
+  | { type: 'state'; state: SessionValues }
+  | { type: 'reset' }
 
 export interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
   seq?: number
+  /** play：正戏（玩家行动 / 章节）；offstage：场外往来 */
+  kind?: 'play' | 'offstage'
 }

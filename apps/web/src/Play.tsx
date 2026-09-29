@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.ts'
 import { Brand } from './Brand.tsx'
 import { Dossier } from './Dossier.tsx'
-import { foldHistory, lastSeqOf, lastTurnDigest, mergeMessages, messageOfEvent, planResume } from './fold.ts'
+import { digestEvent, emptyDigest, foldHistory, lastSeqOf, lastTurnDigest, mergeMessages, messageOfEvent, planResume, type TurnDigest } from './fold.ts'
 import { GmChat, type GmChatItem } from './GmChat.tsx'
 import { levelLabel, LevelStrip, MeterStrip, placementOf } from './Meters.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
@@ -14,20 +14,18 @@ import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { openSessionStream } from './stream.ts'
 import { parseTurn } from './turn.ts'
 import type {
+  ActionOption,
   AttributesSnapshot,
   ChatMessage,
-  CheckMeta,
-  InventoryChange,
   InventorySnapshot,
-  MechanicsChange,
   MechanicsSnapshot,
   ModelCatalog,
-  MuxFrame,
   ProgressionSnapshot,
   ProgressSnapshot,
   SessionStats,
+  SessionValues,
   StoryDetail,
-  XpMeta,
+  StreamFrame,
 } from './types.ts'
 
 interface Props {
@@ -37,7 +35,7 @@ interface Props {
   onOpenHistory: () => void
   /** 营地：本剧本的详情页（存档/读档/修改剧本） */
   onOpenCamp: () => void
-  /** 重写回合会 fork 出新会话取代当前会话，由父组件切换 */
+  /** 会话被替换时由父组件切换（重写回合现在原地截断，id 不变，保留这个出口） */
   onSessionReplaced: (sessionId: string) => void
 }
 
@@ -52,21 +50,9 @@ const MODES: { key: ActionMode; label: string; hint: string; placeholder: string
   { key: 'continue', label: '继续', hint: '留空直接发送，让 GM 顺势往下写', placeholder: '留空即"继续推进剧情"，也可以补一句要求' },
 ]
 const CONTINUE_TEXT = '继续推进剧情。'
-/** 工具轮的可见化文案：正文开流前玩家看到 GM 正在做什么 */
-const TOOL_PHASE: Record<string, string> = {
-  report_progress: '核对剧情进度',
-  adjust_resources: '结算数值',
-  adjust_attributes: '结算属性',
-  adjust_inventory: '清点物品',
-  roll_check: '掷骰判定',
-  revise_setting: '修订设定',
-  grant_xp: '结算经验',
-  spend_points: '分配属性点',
-}
 const OFFSTAGE_PREFIX = '【场外】'
-/** GM 的场外回复以（场外）开头——底座场外协议规定的固定格式 */
-const isOffstageReply = (text: string) => /^\s*[（(]场外[)）]/.test(text)
 const isOffstageAsk = (text: string) => text.trimStart().startsWith(OFFSTAGE_PREFIX)
+const OPTION_KEYS = ['A', 'B', 'C', 'D']
 const stripOffstage = (text: string) =>
   text.replace(/^\s*【场外】\s*/, '').replace(/^\s*[（(]场外[)）]\s*/, '')
 /** 按档位包装自由输入；手打的【场外】原样放行，照旧走场外协议 */
@@ -91,25 +77,23 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
   const [inventory, setInventory] = useState<InventorySnapshot>()
   const [progress, setProgress] = useState<ProgressSnapshot>()
   const [progression, setProgression] = useState<ProgressionSnapshot>()
-  /** 本回合的经验结算（含升级发点） */
-  const [xpChange, setXpChange] = useState<XpMeta>()
-  /** 待分配的加点（属性 id → 点数）：在卷宗里攒，随下一步行动发送，由 GM 经 spend_points 落账 */
+  /** 待分配的加点（属性 id → 点数）：在卷宗里攒，随下一步行动发送，由代码直接落账 */
   const [alloc, setAlloc] = useState<Record<string, number>>({})
-  /** 本回合的结算明细（资源+属性），跟着正文一起显示 */
-  const [settlement, setSettlement] = useState<MechanicsChange[]>([])
-  /** 本回合的物品变动与判定 */
-  const [invChanges, setInvChanges] = useState<InventoryChange[]>([])
-  const [check, setCheck] = useState<CheckMeta>()
+  /** 最近一章的结算卡：数值、物品、判定、经验，以及结算步给出的下一步选项 */
+  const [digest, setDigest] = useState<TurnDigest>(emptyDigest)
+  const { settlement, inventory: invChanges, check, xp: xpChange } = digest
   const [scene, setScene] = useState<string>()
   const [freeMode, setFreeMode] = useState(false)
   const [inputMode, setInputMode] = useState<ActionMode>('act')
   /** 场外悬浮框开关；场外对话不进正文流 */
   const [gmOpen, setGmOpen] = useState(false)
-  /** 当前生成中的回合是否由场外消息发起（刷新丢失时靠（场外）前缀兜底判断） */
+  /** 当前生成中的回合是否是场外回合（turn/start 与断点信息都带回合类型） */
   const offstageTurn = useRef(false)
   /** 本回合是否收到过可见正文——完成却全空说明模型把内容写进了推理通道 */
   const sawText = useRef(true)
   const [emptyTurn, setEmptyTurn] = useState(false)
+  /** 这个会话开过回合没有（开场那一回合失败或被停掉时，界面要给出重新开场的出口） */
+  const [started, setStarted] = useState(false)
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [elapsed, setElapsed] = useState(0)
@@ -172,9 +156,19 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
     pendingChunks.current = []
     liveTurnStart.current = -1
     liveTurnEnd.current = -1
-    // 换会话（重写回合 fork 出子会话）：待分配的加点与上回合经验结算都属于旧会话
+    // 换会话：待分配的加点与上回合的结算卡都属于旧会话
     setAlloc({})
-    setXpChange(undefined)
+    setDigest(emptyDigest())
+
+    const applyValues = (values?: SessionValues) => {
+      if (!values) return
+      if (values.mechanics) setMechanics(values.mechanics)
+      if (values.attributes) setAttributes(values.attributes)
+      if (values.inventory) setInventory(values.inventory)
+      if (values.progress) setProgress(values.progress)
+      if (values.progression) setProgression(values.progression)
+      if (values.sessionStats) setStats(values.sessionStats)
+    }
 
     /** 按历史快照对齐本地状态：首次打开与每次重连后都走这里，多次调用结果一致 */
     const apply = (
@@ -197,47 +191,25 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
       setRunning(plan.running)
       if (plan.resumedInflight && inflight) {
         startedAt.current = inflight.startedAt
+        offstageTurn.current = inflight.kind === 'offstage'
         sawText.current = plan.streaming.length > 0
-        setPhase(plan.streaming ? undefined : '构思中')
+        setPhase(plan.streaming ? undefined : inflight.phase ?? '构思中')
       } else if (!plan.running) {
         setPhase(undefined)
+        offstageTurn.current = false
       }
       setMessages(prev => mergeMessages(foldHistory(events), prev, plan.boundary))
-      // 打开存档时立刻还原数值、幕进度与最近一回合的机制事件，不必等下一回合
-      const values = projections?.values
-      // 投影 key 按剧本分片成 `base:剧本id`，认前缀不认全等（裸 key 兼容旧存档）
-      const pick = <T,>(base: string): T | undefined => {
-        const all = (values ?? {}) as Record<string, unknown>
-        if (all[base]) return all[base] as T
-        const k = Object.keys(all).find(x => x.startsWith(`${base}:`) && all[x])
-        return k ? (all[k] as T) : undefined
-      }
-      const mech = pick<MechanicsSnapshot>('mechanics')
-      if (mech) setMechanics(mech)
-      const attrs = pick<AttributesSnapshot>('attributes')
-      if (attrs) setAttributes(attrs)
-      const inv = pick<InventorySnapshot>('inventory')
-      if (inv) setInventory(inv)
-      const prog = pick<ProgressSnapshot>('progress')
-      if (prog) setProgress(prog)
-      const progression = pick<ProgressionSnapshot>('progression')
-      if (progression) setProgression(progression)
-      if (values?.sessionStats) setStats(values.sessionStats)
-      // 本回合结算卡：拉取窗口内已开了新回合的话，帧处理器正在累积，不用快照盖掉
-      if (!plan.startedMeanwhile) {
-        const digest = lastTurnDigest(events)
-        setSettlement(digest.settlement)
-        setInvChanges(digest.inventory)
-        setCheck(digest.check)
-        setXpChange(digest.xp)
-      }
+      // 打开存档时立刻还原数值、幕进度与最近一章的结算卡，不必等下一回合
+      applyValues(projections?.values)
+      // 拉取窗口内已开了新回合的话，帧处理器正在累积结算卡，不用快照盖掉
+      if (!plan.startedMeanwhile) setDigest(lastTurnDigest(events))
       // 阅读位置：首次打开归顶；重拉发现了实时流没见过的新回合（离开期间开始或结束的）也归顶
       const lastStart = lastSeqOf(events, 'turn/start')
+      setStarted(lastStart >= 0)
       if (initial || lastStart > liveTurnStart.current) resetToTopRef.current()
       liveTurnStart.current = Math.max(liveTurnStart.current, lastStart)
       liveTurnEnd.current = Math.max(liveTurnEnd.current, lastSeqOf(events, 'turn/end'))
-      // 新会话并非空日志（dsh 先写权限/沙箱等配置事件），只有 turn/start 能证明对话开过；
-      // 用它判断还能挡住"首回合生成中刷新页面"导致的重复开场。
+      // 空会话补发开场：只有 turn/start 能证明对话开过；它还能挡住"首回合生成中刷新页面"导致的重复开场
       if (lastStart < 0 && opened.current !== sessionId) {
         opened.current = sessionId
         api.prompt(sessionId, '（开始）').catch(err => setError(String(err)))
@@ -273,107 +245,75 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
       sessionId,
       onLive: reconnect => void sync(!reconnect),
       onFrame: (raw) => {
-        const frame = JSON.parse(raw.data) as MuxFrame
-        if (frame.type === 'session/projection') {
-          // key 形如 `mechanics:story-xxx`（按剧本分片），取冒号前的域名分派
-          const base = String(frame.key ?? '').split(':')[0]
-          if (base === 'sessionStats') {
-            setStats(frame.value as SessionStats)
-            return
-          }
-          if (base === 'mechanics') {
-            setMechanics(frame.value as MechanicsSnapshot)
-            return
-          }
-          if (base === 'attributes') {
-            setAttributes(frame.value as AttributesSnapshot)
-            return
-          }
-          if (base === 'inventory') {
-            setInventory(frame.value as InventorySnapshot)
-            return
-          }
-          if (base === 'progress') {
-            setProgress(frame.value as ProgressSnapshot)
-            return
-          }
-          if (base === 'progression') {
-            setProgression(frame.value as ProgressionSnapshot)
-            return
+        const frame = JSON.parse(raw.data) as StreamFrame
+        if (frame.type === 'state') {
+          applyValues(frame.state)
+          return
+        }
+        if (frame.type === 'reset') {
+          // 日志被截断（重写上一回合）：本地的消息与回合边界都作废，按一次全新打开重拉
+          liveTurnStart.current = -1
+          liveTurnEnd.current = -1
+          setMessages([])
+          setDigest(emptyDigest())
+          void sync(true)
+          return
+        }
+        if (frame.type === 'phase') {
+          setPhase(frame.phase)
+          return
+        }
+        if (frame.type === 'delta') {
+          setPhase(undefined)
+          if (!histReady.current) {
+            pendingChunks.current.push({ seq: frame.seq, text: frame.text })
+          } else if (frame.seq > chunkFloor.current) {
+            setStreaming(s => s + frame.text)
           }
           return
         }
-        if (frame.type !== 'session/event' || !frame.event) return
         const event = frame.event
-
-        // 结算阶段可见化：等待的大头是推理与工具轮，报出正在做什么
-        if (event.type === 'tool/call') {
-          const name = (event.data as { name?: string }).name
-          if (name) setPhase(TOOL_PHASE[name] ?? '结算面板')
-          return
-        }
-
-        // 机制事件从 tool/result 的 meta 取，与正文同回合展示（turn/start 时清零）
-        if (event.type === 'tool/result') {
-          const meta = (event.data as { meta?: { kind?: string; changes?: unknown[] } }).meta
-          if (!meta?.kind) return
-          if ((meta.kind === 'mechanics/resources' || meta.kind === 'mechanics/attributes') && meta.changes?.length) {
-            setSettlement(prev => [...prev, ...(meta.changes as MechanicsChange[])])
-          }
-          if (meta.kind === 'mechanics/inventory' && meta.changes?.length) {
-            setInvChanges(prev => [...prev, ...(meta.changes as InventoryChange[])])
-          }
-          if (meta.kind === 'mechanics/check') setCheck(meta as unknown as CheckMeta)
-          if (meta.kind === 'mechanics/xp') setXpChange(meta as unknown as XpMeta)
-          return
-        }
+        const data = event.data as { kind?: string; reason?: string; error?: string; text?: string }
 
         if (event.type === 'turn/start') {
           liveTurnStart.current = event.seq
+          setStarted(true)
           startedAt.current = Date.now()
           setElapsed(0)
           setRunning(true)
           setPhase('构思中')
           setStreaming('')
-          setSettlement([])
-          setInvChanges([])
-          setCheck(undefined)
-          setXpChange(undefined)
-          sawText.current = false
-          setEmptyTurn(false)
-          // 新回合从头开始读；想边写边看就自己往下滚，跟随会自动接管
-          resetToTopRef.current()
+          setError(undefined)
+          offstageTurn.current = data.kind === 'offstage'
+          if (data.kind === 'play') {
+            setDigest(emptyDigest())
+            sawText.current = false
+            setEmptyTurn(false)
+            // 新回合从头开始读；想边写边看就自己往下滚
+            resetToTopRef.current()
+          }
+          return
         }
         if (event.type === 'turn/end') {
           liveTurnEnd.current = event.seq
           setRunning(false)
-          // 完成却没有任何可见正文：内容翻进了推理通道，给玩家一个重新生成的出口
-          const reason = (event.data as { reason?: { kind?: string } }).reason?.kind
-          if (reason === 'completed' && !sawText.current) setEmptyTurn(true)
+          setPhase(undefined)
+          setStreaming('')
+          if (data.reason === 'error' && data.error) setError(data.error)
+          // 完成却没有任何可见正文（服务端已原地重写过一次）：给玩家一个重写的出口
+          if (data.kind === 'play' && data.reason === 'completed' && !sawText.current) setEmptyTurn(true)
+          // 没正常收尾的回合：重拉一遍，让结算卡与选项回到最后一章
+          if (data.reason !== 'completed') void sync(false)
           offstageTurn.current = false
-        }
-
-        if (event.type === 'assistant/chunk') {
-          const chunk = event.data.chunk
-          if (chunk?.type === 'reasoning-delta' || chunk?.type === 'reasoning') setPhase('构思中')
-          if (chunk?.type === 'text-delta' && chunk.text) {
-            setPhase(undefined)
-            if (!histReady.current) {
-              pendingChunks.current.push({ seq: event.seq, text: chunk.text })
-            } else if (event.seq > chunkFloor.current) {
-              setStreaming(s => s + chunk.text)
-            }
-          }
-          if (chunk?.type === 'finish') {
-            const failure = (chunk as { reason?: { failure?: { message?: string } } }).reason?.failure
-            if (failure?.message) setError(failure.message)
-          }
           return
         }
-
+        if (event.type === 'settlement' || event.type === 'points/spent' || event.type === 'check/rolled') {
+          setDigest(d => digestEvent(d, event))
+          return
+        }
         const msg = messageOfEvent(event)
         if (msg) {
-          if (msg.role === 'assistant') sawText.current = true
+          if (event.type === 'chapter') sawText.current = Boolean(data.text?.trim())
           setMessages(prev => (prev.some(m => m.seq === msg.seq) ? prev : [...prev, msg]))
           if (msg.role === 'assistant') setStreaming('')
         }
@@ -418,28 +358,28 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
   const latest = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.role === 'assistant' && !isOffstageReply(m.text)) return parseTurn(m.text)
+      if (m.role === 'assistant' && m.kind === 'play') return parseTurn(m.text)
     }
     return undefined
   }, [messages])
 
-  /** 场外对话史：同一会话里的【场外】/（场外）消息对 */
+  /** 场外对话史：同一会话里的场外提问与答复 */
   const gmChatItems = useMemo<GmChatItem[]>(() =>
     messages
-      .filter(m => (m.role === 'user' ? isOffstageAsk(m.text) : isOffstageReply(m.text)))
+      .filter(m => m.kind === 'offstage')
       .map(m => ({ role: m.role === 'user' ? 'you' : 'gm', text: stripOffstage(m.text) })), [messages])
 
   const lastPlayerAction = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.role === 'user' && !isOffstageAsk(m.text)) return m.text
+      if (m.role === 'user' && m.kind === 'play') return m.text
     }
     return undefined
   }, [messages])
 
   // 正文里最近一个场景标题，作为顶栏的"当前场景"（场外流不参与）
   useEffect(() => {
-    const source = (streaming && !isOffstageReply(streaming) ? streaming : '') || latest?.narrative
+    const source = (streaming && !offstageTurn.current ? streaming : '') || latest?.narrative
     if (!source) return
     const headings = [...source.matchAll(/^#{3,4}\s+(.+)$/gm)]
     if (headings.length) setScene(headings[headings.length - 1][1])
@@ -536,10 +476,13 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
   const characterNames = story?.cast.filter(c => knownCast.has(c.id)).map(c => c.name) ?? []
   const ended = progress?.phase === 'ended'
   // 场外回合的流式输出只进悬浮框，不打扰正文
-  const offstreaming = offstageTurn.current || isOffstageReply(streaming)
+  const offstreaming = offstageTurn.current
   const mainStreaming = offstreaming ? '' : streaming
   const idle = !running && !streaming
-  const options = idle && !ended ? latest?.options ?? [] : []
+  // 选项来自最后一章的结算（结构化字段），不再从正文里解析
+  const options: ActionOption[] = idle && !ended && latest
+    ? digest.options.map((label, i) => ({ key: OPTION_KEYS[i], label }))
+    : []
   // GM 没按格式给选项时也要留出路，否则玩家无处可点
   const showFreeEntry = idle && !freeMode && !ended
   const canSend = inputMode === 'continue' || Boolean(input.trim())
@@ -562,7 +505,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
         {mechanics && <MeterStrip snapshot={mechanics} knownCast={knownCast} />}
         <div className="tools">
           <button onClick={() => setModelOpen(true)} title="切换本局模型">
-            ▨<span className="t">{' '}{catalog?.current.model.replace('deepseek-v4-', '') ?? '…'}</span>
+            ▨<span className="t">{' '}{catalog?.current.model.replace(/^deepseek-(v4-)?/, '') ?? '…'}</span>
           </button>
           <button onClick={() => setDossier(true)} title="卷宗">▤<span className="t"> 卷宗</span></button>
           <button onClick={onOpenHistory} title="回顾">▦<span className="t"> 回顾</span></button>
@@ -605,8 +548,18 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
             </div>
           )}
 
-          {!streaming && !latest && !running && (
+          {!streaming && !latest && !running && !started && (
             <p className="dim">正在开场…</p>
+          )}
+
+          {/* 开场那一回合失败或被停掉：没有正文可读，也就没有选项——给一个重新开场的出口 */}
+          {!streaming && !latest && !running && started && (
+            <div className="choices">
+              <button className="choice free" onClick={() => void retry()} disabled={retrying}>
+                <span className="key">↻</span>
+                <span className="label">{retrying ? '正在重新开场…' : '开场没有写成——重新开场'}</span>
+              </button>
+            </div>
           )}
 
           {/* 判定卡片：代码权威的掷骰结果，数字只出现在这里，不进正文 */}
@@ -696,7 +649,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
                 className="choice free"
                 onClick={() => {
                   setEmptyTurn(false)
-                  void send('（上一回合我没有收到任何正文——请重新输出这一回合：正文写在正式回复里，结尾带【行动】块。）')
+                  void retry()
                 }}
               >
                 <span className="key">↻</span>
@@ -757,7 +710,7 @@ export function Play({ sessionId, story, onExit, onOpenHistory, onOpenCamp, onSe
             </div>
           )}
 
-          {/* 重写上一回合：fork 弃旧线，同一行动重新生成 */}
+          {/* 重写上一回合：截断日志（原稿归档），同一行动重新生成 */}
           {idle && !ended && latest && !freeMode && (
             <button className="retry-line" onClick={() => void retry()} disabled={retrying}>
               {retrying ? '↻ 正在回退重写…' : '↻ 对这回合不满意——重写'}

@@ -1,37 +1,33 @@
-/** 会话事件 → 聊天消息的折叠逻辑（M0：只认 user/message 与 assistant/message 的 text 块）。 */
+/** 会话事件 → 界面状态的折叠逻辑：消息流、最近一回合的结算卡与选项、断线重连后的对齐。 */
 import type {
   ChatMessage,
   CheckMeta,
-  ContentBlock,
   HistoryEntry,
   InventoryChange,
   MechanicsChange,
   SessionEvent,
+  SettlementReceipt,
   XpMeta,
 } from './types.ts'
 
-export function textOfBlocks(blocks: unknown): string {
-  if (!Array.isArray(blocks)) return ''
-  return (blocks as ContentBlock[])
-    .filter(b => b && b.type === 'text' && typeof b.text === 'string')
-    .map(b => b.text)
-    .join('')
-}
-
+/**
+ * 一条事件对应的消息（没有就 undefined）：玩家输入、章节、场外答复、工坊的回复。
+ * 开局那条"（开始）"是平台替玩家发的，不显示。
+ */
 export function messageOfEvent(event: SessionEvent): ChatMessage | undefined {
-  if (event.type === 'user/message') {
-    // user/message 的 data 本身就是 UserMessage；回合头注入块是平台给 GM 的机械提醒，
-    // 不是玩家的话，界面上剥掉。用 includes 而不是 startsWith：注入块开头可能还有别的段
-    // （如【经验】），整块首字符不一定是【回合流程】——认标记不认位置，前缀判断落空过一次。
-    const blocks = Array.isArray(event.data.content)
-      ? event.data.content.filter(b => !(typeof b.text === 'string' && b.text.includes('【回合流程】')))
-      : event.data.content
-    const text = textOfBlocks(blocks)
-    if (text) return { role: 'user', text, seq: event.seq }
+  const d = event.data as { text?: unknown; offstage?: unknown; opening?: unknown; content?: unknown }
+  if (event.type === 'player/input') {
+    if (d.opening || typeof d.text !== 'string' || !d.text) return undefined
+    return { role: 'user', text: d.text, seq: event.seq, kind: d.offstage ? 'offstage' : 'play' }
   }
-  if (event.type === 'assistant/message') {
-    const text = textOfBlocks(event.data.message?.content)
-    if (text) return { role: 'assistant', text, seq: event.seq }
+  if (event.type === 'chapter' && typeof d.text === 'string') {
+    return { role: 'assistant', text: d.text, seq: event.seq, kind: 'play' }
+  }
+  if (event.type === 'reply' && typeof d.text === 'string' && d.text) {
+    return { role: 'assistant', text: d.text, seq: event.seq, kind: 'offstage' }
+  }
+  if (event.type === 'agent/message' && typeof d.content === 'string' && d.content.trim()) {
+    return { role: 'assistant', text: d.content, seq: event.seq }
   }
   return undefined
 }
@@ -41,31 +37,47 @@ export interface TurnDigest {
   inventory: InventoryChange[]
   check?: CheckMeta
   xp?: XpMeta
+  /** 这一章结算出的下一步选项；结算步失败或还没结算时为空 */
+  options: string[]
 }
 
-/** 汇总最近一个回合的机制事件（结算/物品/判定），供刷新页面后仍能看到本回合变化。 */
-export function lastTurnDigest(entries: HistoryEntry[]): TurnDigest {
-  let lastTurnStart = -1
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].event.type === 'turn/start') {
-      lastTurnStart = i
-      break
+export const emptyDigest = (): TurnDigest => ({ settlement: [], inventory: [], options: [] })
+
+/** 把一条事件并进当前回合的结算卡（实时帧与重拉历史走同一份逻辑）。 */
+export function digestEvent(digest: TurnDigest, event: SessionEvent): TurnDigest {
+  if (event.type === 'settlement') {
+    const r = (event.data as { receipt?: SettlementReceipt }).receipt
+    if (!r) return digest
+    return {
+      ...digest,
+      settlement: [...digest.settlement, ...r.upkeep, ...r.resources, ...r.attributes],
+      inventory: [...digest.inventory, ...r.inventory],
+      ...r.xp ? { xp: r.xp } : {},
+      options: r.options,
     }
   }
-  const digest: TurnDigest = { settlement: [], inventory: [] }
-  for (let i = Math.max(0, lastTurnStart); i < entries.length; i++) {
+  if (event.type === 'points/spent') {
+    const changes = (event.data as { changes?: MechanicsChange[] }).changes ?? []
+    return { ...digest, settlement: [...digest.settlement, ...changes] }
+  }
+  if (event.type === 'check/rolled') return { ...digest, check: event.data as unknown as CheckMeta }
+  return digest
+}
+
+/**
+ * 最近一个写出了章节的正戏回合的结算卡（刷新页面后仍能看到本回合变化与选项）。
+ * 以"最后一章"为准：之后被取消的回合没有正文，它不该把上一章的选项清掉。
+ */
+export function lastTurnDigest(entries: HistoryEntry[]): TurnDigest {
+  const chapterAt = entries.findLastIndex(e => e.event.type === 'chapter')
+  if (chapterAt < 0) return emptyDigest()
+  let start = chapterAt
+  while (start > 0 && entries[start].event.type !== 'turn/start') start--
+  let digest = emptyDigest()
+  for (let i = start + 1; i < entries.length; i++) {
     const event = entries[i].event
-    if (event.type !== 'tool/result') continue
-    const meta = (event.data as { meta?: { kind?: string; changes?: unknown[] } }).meta
-    if (!meta?.kind) continue
-    if (meta.kind === 'mechanics/resources' || meta.kind === 'mechanics/attributes') {
-      digest.settlement.push(...(meta.changes as MechanicsChange[] ?? []))
-    }
-    if (meta.kind === 'mechanics/inventory') {
-      digest.inventory.push(...(meta.changes as InventoryChange[] ?? []))
-    }
-    if (meta.kind === 'mechanics/check') digest.check = meta as unknown as CheckMeta
-    if (meta.kind === 'mechanics/xp') digest.xp = meta as unknown as XpMeta
+    if (event.type === 'turn/start') break
+    digest = digestEvent(digest, event)
   }
   return digest
 }

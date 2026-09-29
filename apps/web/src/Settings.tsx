@@ -110,7 +110,7 @@ export function Settings({ status, onSaved }: Props) {
                   </button>
                 </div>
                 <p className="hint">
-                  保存后立即生效，无需重启。Key 写入服务器的 dsh 数据卷（.credentials.yaml），
+                  保存后立即生效，无需重启。Key 写入服务器的数据卷（v2/credentials.json，仅本机可读），
                   与存档一同持久化，不会进入 Git。
                 </p>
                 {status?.configured && (
@@ -163,7 +163,7 @@ export function Settings({ status, onSaved }: Props) {
         )}
         <p className="hint">
           Flash 快而省，Pro 更擅长长篇叙事的连贯与人物层次；推理强度越高想得越久越贵，
-          Off 关闭思考模式出文最快。单局可在游戏内临时切换，不影响这里的默认。
+          Off 关闭思考模式出文最快（只影响写正文，结算步本来就不思考）。单局可在游戏内临时切换，不影响这里的默认。
         </p>
       </section>
     </div>

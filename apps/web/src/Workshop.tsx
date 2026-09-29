@@ -10,7 +10,7 @@ import { usePixelDialog } from './PixelDialog.tsx'
 import { foldHistory, lastSeqOf, mergeMessages, messageOfEvent, planResume } from './fold.ts'
 import { StoryMarkdown } from './StoryMarkdown.tsx'
 import { openSessionStream } from './stream.ts'
-import type { ChatMessage, MuxFrame } from './types.ts'
+import type { ChatMessage, StreamFrame } from './types.ts'
 
 interface Props {
   sessionId: string
@@ -40,6 +40,8 @@ export function Workshop({
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
   const [running, setRunning] = useState(false)
+  /** 工具轮的可见化（载入剧本、发布剧本……） */
+  const [phase, setPhase] = useState<string>()
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [importNote, setImportNote] = useState<string>()
@@ -121,28 +123,35 @@ export function Workshop({
       sessionId,
       onLive: () => void sync(),
       onFrame: (raw) => {
-        const frame = JSON.parse(raw.data) as MuxFrame
-        if (frame.type !== 'session/event' || !frame.event) return
+        const frame = JSON.parse(raw.data) as StreamFrame
+        if (frame.type === 'phase') {
+          setPhase(frame.phase)
+          return
+        }
+        if (frame.type === 'delta') {
+          setPhase(undefined)
+          if (!histReady.current) {
+            pendingChunks.current.push({ seq: frame.seq, text: frame.text })
+          } else if (frame.seq > chunkFloor.current) {
+            setStreaming(s => s + frame.text)
+          }
+          return
+        }
+        if (frame.type !== 'event') return
         const event = frame.event
         if (event.type === 'turn/start') {
           liveTurnStart.current = event.seq
           setRunning(true)
           setStreaming('')
+          setError(undefined)
         }
         if (event.type === 'turn/end') {
           liveTurnEnd.current = event.seq
           setRunning(false)
-        }
-        if (event.type === 'assistant/chunk') {
-          const chunk = event.data.chunk
-          if (chunk?.type === 'text-delta' && chunk.text) {
-            if (!histReady.current) {
-              pendingChunks.current.push({ seq: event.seq, text: chunk.text })
-            } else if (event.seq > chunkFloor.current) {
-              setStreaming(s => s + chunk.text)
-            }
-          }
-          return
+          setPhase(undefined)
+          setStreaming('')
+          const data = event.data as { reason?: string; error?: string }
+          if (data.reason === 'error' && data.error) setError(data.error)
         }
         const msg = messageOfEvent(event)
         if (msg) {
@@ -192,7 +201,7 @@ export function Workshop({
     <div className="screen">
       <header className="topbar">
         <Brand />
-        <div className="crumbs"><b>{title}</b>{running && <span>构思中…</span>}</div>
+        <div className="crumbs"><b>{title}</b>{running && <span>{phase ?? '构思中'}…</span>}</div>
         <div className="tools">
           {showKit && (
             <a className="tool-link" href="/app/authoring-guide" title="下载创作说明书（自己写剧本用）">

@@ -9,7 +9,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "yaml": "^2.8.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
-# 单容器双进程：dsh 运行时（loopback 3090）+ BFF（3000）。
-# dsh 有意只信任 loopback，因此两者必须同处一个网络命名空间。
+# 单进程：BFF 与内核（packages/engine）同一个 Node 进程，直连 DeepSeek。
+# v2 起不再有 dsh 运行时，也就不再需要"两进程同容器"的入口脚本。
 FROM node:24-bookworm
 
 WORKDIR /app
@@ -11,21 +11,23 @@ RUN npm config set registry https://registry.npmmirror.com \
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/bff/package.json ./apps/bff/
 COPY apps/web/package.json ./apps/web/
+COPY packages/engine/package.json ./packages/engine/
+COPY packages/llm/package.json ./packages/llm/
+COPY packages/store/package.json ./packages/store/
 COPY packages/scenario-compiler/package.json ./packages/scenario-compiler/
 COPY packages/mechanics/package.json ./packages/mechanics/
 COPY packages/progress/package.json ./packages/progress/
 COPY packages/workshop/package.json ./packages/workshop/
-COPY packages/tool-mask/package.json ./packages/tool-mask/
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --registry=https://registry.npmmirror.com
 
 COPY . .
 RUN pnpm run build
 
+# 数据根沿用 dsh 时代的路径：宿主机数据卷挂载点不用改
 ENV NODE_ENV=production \
-    DSH_HOME=/app/runtime/dsh-home \
-    DSH_API_BASE=http://127.0.0.1:3090 \
+    TALEFORGE_HOME=/app/runtime/dsh-home \
     PORT=31415
 
 EXPOSE 31415
 
-CMD ["bash", "docker/entrypoint.sh"]
+CMD ["node", "apps/bff/src/index.ts"]
