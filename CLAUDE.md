@@ -351,6 +351,7 @@ agent 只知道"这里不行"而不知道正确出路时，会向玩家把工具
 - 本地不花额度的全链路验证：用 `DEEPSEEK_BASE_URL` 指向一个模拟服务（按官方约束校验请求），`TALEFORGE_HOME` 指向临时目录，真 BFF 进程照常跑。
 - **回合首字延迟**：正文步开思考，推理阶段（flash 每回合先想，长的 30 秒+）发生在正文首字之前；v2 起首字前的工具往返只有掷骰那一次。结算步关思考、只出一个工具调用，实测 1–2 秒，发生在正文写完之后（玩家在读）。前端把阶段可见化（构思中/掷骰判定/结算中）。
 - **前端事件流靠"重连即重拉"自愈**（apps/web/src/stream.ts + fold.ts planResume）：切后台/锁屏/网络切换会让 SSE 在服务端已断而客户端仍显示 OPEN，漏掉的 turn/end 永远不会再来。对策是回前台/pageshow/online 一律重建连接，每次连接建立后重拉 history 按 seq 对齐本地状态；心跳是具名 `event: ping`（SSE 注释到不了页面脚本），前端 60s 没帧就重连——别把心跳改回注释。
+- **可安装应用（PWA，2026-09-29）**：`apps/web/public/` 下的 `manifest.webmanifest`（独立窗口、深色底）、`sw.js`、图标（64/180/192/512，另有四周补同色底的可裁切版 `logo-maskable-*`）。几条别改坏：清单链接带 `crossorigin="use-credentials"`——公网入口有 HTTP Basic 登录，不带凭据取清单会拿到 401、装不上；service worker **只缓存 `/assets/`（带内容 hash）与 `/fonts/`**，页面、接口、事件流一律直连，所以"平台已更新"的检测照常工作、SSE 不受影响；同名资源换了 hash 会删掉旧的那份。`src/pwa.test.ts` 守着清单字段与图标尺寸。iOS 的"添加到主屏幕"在 Basic 登录下可能每次启动都要求重新登录（系统限制）。
 - **路径路由靠服务端回退 index.html**：界面用 `/games/:id/play` 这类地址（History API，自写的 `router.tsx`），平台服务对非 `/app` 路径一律回 `index.html`，所以任何页面都能直接刷新、直接分享。旧版的 `#/…` 地址进来一律回标题画面。
 - **Tailwind 的 `hidden` 盖不住 `.px-btn`**：Tailwind 4 的工具类在 `@layer utilities` 里，样式表里未分层的 `.px-btn { display: inline-flex }` 优先级更高。要按屏宽隐藏一个 `.px-btn`，把 `hidden sm:inline-flex` 套在外层 span 上（游玩页的模型按钮就是这么做的）。同理 `.px-input` 的 `min-height` 压过 `min-h-*`：文本框的高度用 `rows` 定。
 

@@ -7,6 +7,12 @@
     <link rel="icon" type="image/png" sizes="64x64" href="/logo-64.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/logo-512.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/logo-180.png" />
+    <!-- 可安装应用：公网入口有 HTTP Basic 登录，清单要带凭据去取，否则拿到 401 装不上 -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="TaleForge" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <title>TaleForge</title>
   </head>
   <body>
